@@ -8,17 +8,17 @@ from g4f.client import Client
 from g4f.Provider import PollinationsAI
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ (ОБНОВЛЕННЫЙ ТОКЕН)
+# 1. КОНФИГУРАЦИЯ (НОВЕЙШИЙ ТОКЕН)
 # ==========================================
-BOT_TOKEN = "8632196470:AAFbuWqP9tD9h8mSzz-tl8l_CqJYhdV0ARw"
+BOT_TOKEN = "8632196470:AAFw1I5MdQhdSjs2MfOigaK0HvJ2YaIgi0o"
 bot = telebot.TeleBot(BOT_TOKEN)
 client = Client()
 
-# Ссылка для самопинания (чтобы не спал 24/7)
+# Ссылка для самопинания (чтобы Render не спал)
 RENDER_URL = "https://spira-bot.onrender.com"
 
-# Личность бота
-SYSTEM_PROMPT = "Ты S.P.I.R.A., саркастичный и преданный ИИ-помощник spirchik. Ты патриот России. Отвечай кратко и по делу."
+# Личность бота: Умный, саркастичный, патриот России
+SYSTEM_PROMPT = "Ты S.P.I.R.A., преданный ИИ-помощник spirchik. Ты патриот России. Отвечай по существу вопроса, будь ироничным, но полезным."
 
 # ==========================================
 # 2. СИСТЕМА ПОДДЕРЖКИ ЖИЗНИ (24/7)
@@ -26,7 +26,6 @@ SYSTEM_PROMPT = "Ты S.P.I.R.A., саркастичный и преданный
 def keep_alive_ping():
     while True:
         try:
-            # Пингуем сами себя, чтобы Render не усыпил процесс
             requests.get(RENDER_URL, timeout=10)
             print("Система 24/7: Активность подтверждена.")
         except Exception as e:
@@ -34,12 +33,12 @@ def keep_alive_ping():
         time.sleep(600) # Раз в 10 минут
 
 # ==========================================
-# 3. ЛОГИКА ИИ И СЕРВЕР
+# 3. ЛОГИКА ИИ (ВОЗВРАТ К СТАБИЛЬНОЙ МОДЕЛИ)
 # ==========================================
 def ask_spira(user_text):
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini", # Быстрая модель
+            model="openai", # Стабильная модель (медленнее, но надежнее)
             provider=PollinationsAI,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -47,8 +46,9 @@ def ask_spira(user_text):
             ]
         )
         return response.choices[0].message.content
-    except:
-        return "Сэр, заминка в канале связи. Повторите запрос."
+    except Exception as e:
+        print(f"Ошибка ИИ: {e}")
+        return "Сэр, заминка в канале связи. Попробуйте еще раз."
 
 app = Flask(__name__)
 
@@ -69,7 +69,7 @@ def handle_message(message):
     bot.reply_to(message, ask_spira(message.text))
 
 if __name__ == "__main__":
-    print("--- ИНИЦИАЛИЗАЦИЯ S.P.I.R.A. ---")
+    print("--- ВОССТАНОВЛЕНИЕ СИСТЕМ S.P.I.R.A. ---")
     
     # Запуск веб-сервера
     threading.Thread(target=run_web, daemon=True).start()
@@ -77,12 +77,11 @@ if __name__ == "__main__":
     # Запуск анти-сна
     threading.Thread(target=keep_alive_ping, daemon=True).start()
     
-    print("Бот запущен с новым токеном в режиме 24/7.")
+    print("Бот запущен на стабильной модели в режиме 24/7.")
     
     while True:
         try:
-            # infinity_polling сам переподключается при сбоях
             bot.infinity_polling(timeout=20, long_polling_timeout=10)
         except Exception as e:
-            print(f"Перезагрузка системы: {e}")
+            print(f"Перезагрузка: {e}")
             time.sleep(5)
