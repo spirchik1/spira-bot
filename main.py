@@ -24,7 +24,7 @@ SYSTEM_PROMPT = """Ты S.P.I.R.A. (Systematic Positronic Intelligent Responsive
 def ask_spira(user_text):
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="openai",
             provider=PollinationsAI,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
