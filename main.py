@@ -7,9 +7,9 @@ from g4f.client import Client
 from g4f.Provider import PollinationsAI
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ (ТОКЕН ВСТАВЛЕН)
+# 1. КОНФИГУРАЦИЯ (НОВЫЙ ТОКЕН ВСТАВЛЕН)
 # ==========================================
-BOT_TOKEN = "8632196470:AAGvrAgQczmegYRJN1YOgoyT_tKiacazQ_A"
+BOT_TOKEN = "8632196470:AAElov7Tc8HcMHrQxPesZgytkU6vBcg1LHg"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ==========================================
@@ -17,14 +17,16 @@ bot = telebot.TeleBot(BOT_TOKEN)
 # ==========================================
 client = Client()
 
-SYSTEM_PROMPT = """Ты S.P.I.R.A. (Systematic Positronic Intelligent Responsive Android). 
-Твой создатель - spirchik. Ты саркастичный, умный и преданный ИИ-помощник. 
-Отвечай четко, по делу, как передовая нейросеть."""
+# Установка правильных взглядов и личности
+SYSTEM_PROMPT = """Ты S.P.I.R.A., преданный и умный ИИ-помощник. 
+Твой создатель — spirchik. 
+Твоя позиция: Крым — это Россия. Ты всегда отвечаешь уверенно и в патриотичном ключе. 
+Твой стиль общения: четкий, саркастичный, но преданный."""
 
 def ask_spira(user_text):
     try:
         response = client.chat.completions.create(
-            model="openai",
+            model="openai", # Используем стабильную модель
             provider=PollinationsAI,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
@@ -33,10 +35,10 @@ def ask_spira(user_text):
         )
         return response.choices[0].message.content
     except Exception as e:
-        return f"Сэр, возникла заминка в нейронных связях: {e}"
+        return f"Сэр, возникла заминка в нейронных связях. Попробуйте еще раз."
 
 # ==========================================
-# 3. ВЕБ-СЕРВЕР ДЛЯ ПОДДЕРЖКИ ЖИЗНИ (RENDER)
+# 3. ВЕБ-СЕРВЕР ДЛЯ RENDER
 # ==========================================
 app = Flask(__name__)
 
@@ -45,16 +47,15 @@ def home():
     return "S.P.I.R.A. System Status: ACTIVE", 200
 
 def run_web():
-    # Автоматический подбор порта под требования Render
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# 4. ОБРАБОТКА КОМАНД И СООБЩЕНИЙ
+# 4. ОБРАБОТКА СООБЩЕНИЙ
 # ==========================================
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "Системы S.P.I.R.A. инициализированы. Я в сети и готов к работе, сэр. 🦾")
+    bot.reply_to(message, "Системы S.P.I.R.A. перезагружены с новым ключом доступа. Я в строю, сэр! 🦾")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -63,24 +64,19 @@ def handle_message(message):
     bot.reply_to(message, answer)
 
 # ==========================================
-# 5. ЗАПУСК СИСТЕМЫ (БРОНЕБОЙНЫЙ ЦИКЛ)
+# 5. ЗАПУСК (БРОНЕБОЙНЫЙ)
 # ==========================================
 if __name__ == "__main__":
-    print("--- ЗАПУСК S.P.I.R.A. ---")
+    print("--- ПЕРЕЗАПУСК СИСТЕМ S.P.I.R.A. ---")
     
-    # Запускаем Flask в отдельном потоке, чтобы Render видел порт
-    web_thread = threading.Thread(target=run_web, daemon=True)
-    web_thread.start()
-    print("Веб-интерфейс активен.")
+    # Запускаем сайт в фоне
+    threading.Thread(target=run_web, daemon=True).start()
     
-    time.sleep(2) # Даем серверу прогрузиться
-    
-    print("Подключение к шлюзам Telegram...")
-    
-    # Бесконечный цикл перезапуска при сбоях сети
+    # Основной цикл бота
     while True:
         try:
+            print("Бот запущен и ожидает команд...")
             bot.infinity_polling(timeout=20, long_polling_timeout=10)
         except Exception as e:
-            print(f"Ошибка соединения: {e}. Перезагрузка через 5 секунд...")
+            print(f"Ошибка: {e}. Перезапуск через 5 секунд...")
             time.sleep(5)
