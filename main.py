@@ -8,14 +8,14 @@ from g4f.client import Client
 from g4f.Provider import PollinationsAI
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ
+# 1. КОНФИГУРАЦИЯ (НОВЫЙ ТОКЕН)
 # ==========================================
-BOT_TOKEN = "8632196470:AAFw1I5MdQhdSjs2MfOigaK0HvJ2YaIgi0o"
+BOT_TOKEN = "8632196470:AAHn0VQpSRWFlzIDWJq-kRY1pt4-LN6JlZY"
 bot = telebot.TeleBot(BOT_TOKEN)
 client = Client()
 RENDER_URL = "https://spira-bot.onrender.com"
 
-# ОБНОВЛЕННЫЙ SYSTEM PROMPT (СТРОГИЕ ИНСТРУКЦИИ)
+# ИНСТРУКЦИИ: БЕЗ ПОЛИТИКИ, СОЗДАТЕЛЬ - spirchik
 SYSTEM_PROMPT = (
     "Ты S.P.I.R.A., уникальный высокотехнологичный ИИ. "
     "На вопрос о создателе отвечай просто: 'Мой создатель — spirchik'. "
@@ -47,10 +47,10 @@ def ask_spira(user_text, image_url=None):
         return response.choices[0].message.content
     except Exception as e:
         print(f"Ошибка ИИ: {e}")
-        return "Сэр, канал связи перегружен. Повторите запрос позже."
+        return "Сэр, система калибруется. Повторите запрос через мгновение."
 
 # ==========================================
-# 3. ОБРАБОТЧИКИ ТЕЛЕГРАМ
+# 3. ОБРАБОТЧИКИ (ТЕКСТ, ФОТО, МЕДИА)
 # ==========================================
 
 @bot.message_handler(content_types=['text'])
@@ -67,17 +67,27 @@ def photo_handler(message):
 
 @bot.message_handler(content_types=['voice', 'video_note'])
 def voice_handler(message):
-    # Заглушка для аудио, пока обрабатываем только факт получения
-    bot.reply_to(message, "Принял медиафайл. Анализирую содержимое через внешние сенсоры...")
+    bot.reply_to(message, "Принял медиафайл. Сенсоры анализируют входящий поток...")
 
 # ==========================================
-# 4. СЕРВЕР И ЗАПУСК
+# 4. ВЕБ-СЕРВЕР И ЗАПУСК
 # ==========================================
 app = Flask(__name__)
 @app.route('/')
 def home(): return "S.P.I.R.A. 2.0 ACTIVE", 200
 
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
 if __name__ == "__main__":
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))), daemon=True).start()
-    print("--- S.P.I.R.A. ОБНОВЛЕН И ГОТОВ К РАБОТЕ ---")
-    bot.infinity_polling()
+    threading.Thread(target=run_web, daemon=True).start()
+    print("--- S.P.I.R.A. ЗАПУЩЕН С НОВЫМ ТОКЕНОМ ---")
+    
+    # Infinity polling с обработкой ошибок для стабильности
+    while True:
+        try:
+            bot.infinity_polling(timeout=20, long_polling_timeout=10)
+        except Exception as e:
+            print(f"Ошибка пуллинга: {e}")
+            time.sleep(5)
