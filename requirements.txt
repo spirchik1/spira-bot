@@ -1,5 +1,5 @@
-pyTelegramBotAPI
-requests
+telebot
 flask
 g4f
-gunicorn
+gtts
+requests
