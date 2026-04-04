@@ -510,5 +510,5 @@ def guild_cmd(m):
         # Проверка, есть ли уже участник
         mem, _ = db_query("SELECT user_id FROM guild_members WHERE user_id=? AND guild_id=?", (uid, gid), True)
         if mem:
-            bot.reply_to(m, "Вы уже в гильдии")
-            return
+            bot.reply_to(m, "Вы уже в этой гильдии")
+            r
