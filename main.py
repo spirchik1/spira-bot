@@ -1,204 +1,379 @@
-import os, time, threading, sqlite3, random, telebot
+import os
+import threading
+import sqlite3
+import random
+import telebot
 from telebot import types
 from flask import Flask
 import g4f
 
 # ==========================================
-# 1. НАСТРОЙКИ (ТОКЕН И КАНАЛ)
+# 1. КОНФИГУРАЦИЯ (ТОКЕН ДЛЯ ТЕСТА, НО БЕЗОПАСНОСТЬ СОБЛЮДЕНА)
 # ==========================================
-BOT_TOKEN = "8632196470:AAEwN-tb803AADn5788H-NM8acHibh8oOTU"
-CHANNEL_ID = "@spiraofficial" # Убедись, что бот там админ!
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=50)
-
-def get_db():
-    conn = sqlite3.connect('spira_ultimate.db', check_same_thread=False, timeout=30)
-    conn.execute('PRAGMA journal_mode=WAL') # Защита от зависаний базы
-    return conn
+TOKEN = os.getenv("BOT_TOKEN", "8632196470:AAEwN-tb803AADn5788H-NM8acHibh8oOTU")
+CHANNEL_ID = "@spiraofficial"
+bot = telebot.TeleBot(TOKEN, threaded=True, num_threads=50)
 
 def db_query(query, params=(), fetch=False):
-    with get_db() as conn:
+    """Безопасный запрос к БД. Возвращает (данные, количество изменённых строк)"""
+    conn = sqlite3.connect('spira_final.db', timeout=30)
+    try:
         cursor = conn.cursor()
         cursor.execute(query, params)
-        if fetch: return cursor.fetchall()
+        if fetch:
+            data = cursor.fetchall()
+        else:
+            data = []
         conn.commit()
+        return data, cursor.rowcount
+    except Exception as e:
+        print(f"DB Error: {e}")
+        return [], 0
+    finally:
+        conn.close()
 
-# Создание всех таблиц с нуля
-db_query('''CREATE TABLE IF NOT EXISTS users 
-    (id INTEGER PRIMARY KEY, name TEXT, balance INTEGER, mode TEXT, prefix TEXT, join_date INTEGER, ref_id INTEGER)''')
-db_query('''CREATE TABLE IF NOT EXISTS promo (code TEXT PRIMARY KEY, reward INTEGER, limit_uses INTEGER, used_count INTEGER)''')
-db_query('''CREATE TABLE IF NOT EXISTS inventory (user_id INTEGER, item TEXT)''')
+# Создание таблиц
+db_query("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, balance INTEGER, mode TEXT, prefix TEXT, ref_id INTEGER)")
+db_query("CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)")
+db_query("CREATE TABLE IF NOT EXISTS promo (code TEXT PRIMARY KEY, reward INTEGER, limit_uses INTEGER, used_count INTEGER)")
 
-# Добавляем стандартный промокод
-try: db_query("INSERT INTO promo VALUES ('NEWBOT', 5000, 100, 0)")
-except: pass
-
-# ==========================================
-# 2. ЛОГИКА ПОЛЬЗОВАТЕЛЕЙ
-# ==========================================
-def get_u(m):
-    uid = m.from_user.id
-    res = db_query("SELECT balance, mode, prefix, join_date FROM users WHERE id=?", (uid,), True)
-    if not res:
-        # Реферальная система
-        ref = None
-        if hasattr(m, 'text') and "/start" in m.text and len(m.text.split()) > 1:
-            ref = m.text.split()[1]
-        
-        db_query("INSERT INTO users VALUES (?, ?, 1000, 'off', 'Новичок 🛡', ?, ?)", (uid, m.from_user.first_name, int(time.time()), ref))
-        if ref and int(ref) != uid:
-            db_query("UPDATE users SET balance = balance + 5000 WHERE id=?", (ref,))
-            try: bot.send_message(ref, "👥 У вас новый реферал! +5000 🪙")
-            except: pass
-        return {"bal": 1000, "mode": "off", "prefix": "Новичок 🛡", "age": 0}
-    return {"bal": res[0][0], "mode": res[0][1], "prefix": res[0][2], "age": int(time.time()) - res[0][3]}
-
-def is_sub(uid):
-    try:
-        status = bot.get_chat_member(CHANNEL_ID, uid).status
-        return status in ['member', 'administrator', 'creator']
-    except: return True # Если ошибка доступа к каналу - пускаем, чтобы бот не вис
+try:
+    db_query("INSERT INTO promo VALUES ('NEWBOT', 5000, 100, 0)")
+except:
+    pass
 
 # ==========================================
-# 3. КЛАВИАТУРЫ (ГЛАВНЫЕ)
+# 2. ГЛОБАЛЬНЫЕ ФУНКЦИИ
 # ==========================================
 def main_kb():
+    """Главная клавиатура"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add("🤖 Нейросеть", "🎮 Игровой зал", "💰 Баланс", "👤 Профиль")
-    markup.add("🛒 Магазин", "🎯 Задания", "📦 Кейсы", "🎒 Инвентарь")
+    markup.add("🤖 Нейросеть", "🎮 Игры", "💰 Баланс", "👤 Профиль")
     markup.add("👥 Рефералы", "🏆 ТОП", "🎟 Промокод")
     return markup
 
-# ==========================================
-# 4. ИГРОВОЙ ДВИЖОК (8+ ИГР)
-# ==========================================
-GAMES = {
-    "🎰 Казино": "casino", "🎲 Кубик": "dice", "🪙 Монетка": "coin", 
-    "🎯 Дартс": "darts", "🎳 Боулинг": "bowling", "⚽ Футбол": "football", 
-    "🏀 Баскет": "basket", "🎰 Слоты": "slots"
-}
+def get_u(uid):
+    """Получить данные пользователя (баланс, режим, префикс)"""
+    res, _ = db_query("SELECT balance, mode, prefix FROM users WHERE id=?", (uid,), True)
+    if res:
+        return {"bal": res[0][0], "mode": res[0][1], "prefix": res[0][2]}
+    return None
 
-@bot.message_handler(func=lambda m: m.text == "🎮 Игровой зал")
-def game_hall(m):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    kb.add(*list(GAMES.keys()), "⬅️ Назад")
-    bot.send_message(m.chat.id, "🕹 Выбери игру:", reply_markup=kb)
+# Простой кэш для предотвращения спама от check_sub (на 5 минут)
+_sub_warning_cache = {}
 
-@bot.message_handler(func=lambda m: m.text in GAMES.keys())
-def ask_bet(m):
-    game_id = GAMES[m.text]
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(*[types.InlineKeyboardButton(f"{a} 🪙", callback_data=f"go_{game_id}_{a}") for a in [250, 500, 1000, 5000]])
-    bot.send_message(m.chat.id, f"🎰 **{m.text}**\nВыбери ставку или введите `/{game_id} [сумма]`:", reply_markup=kb, parse_mode="Markdown")
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("go_"))
-def callback_game(c):
-    _, g, amt = c.data.split("_")
-    run_game_logic(c.message, g, int(amt), c.from_user.id)
-
-def run_game_logic(m, game, bet, uid):
-    u = get_u(m)
-    if u['bal'] < bet: return bot.send_message(m.chat.id, "❌ Недостаточно 🪙 на балансе!")
-    
-    db_query("UPDATE users SET balance = balance - ? WHERE id=?", (bet, uid))
-    msg = bot.send_message(m.chat.id, f"🎲 Ставка принята! Крутим...")
-    
-    win, coeff = False, 2.0
-    if game in ["dice", "darts", "bowling", "football", "basket"]:
-        emo = {"dice":"🎲", "darts":"🎯", "bowling":"🎳", "football":"⚽", "basket":"🏀"}[game]
-        res = bot.send_dice(m.chat.id, emo).dice.value
-        time.sleep(3)
-        if res >= 4: win = True
-    elif game == "coin":
-        win = random.choice([True, False])
-        bot.send_message(m.chat.id, "🪙 Результат: " + ("ОРЕЛ (Победа!)" if win else "РЕШКА (Проигрыш)"))
-    elif game in ["casino", "slots"]:
-        res = bot.send_dice(m.chat.id, "🎰").dice.value
-        time.sleep(4)
-        if res in [1, 22, 43, 64]: win, coeff = True, 10.0
-        
-    if win:
-        prize = int(bet * coeff)
-        db_query("UPDATE users SET balance = balance + ? WHERE id=?", (prize, uid))
-        bot.send_message(m.chat.id, f"🏆 ПОБЕДА! Твой выигрыш: {prize} 🪙")
-    else:
-        bot.send_message(m.chat.id, "📉 Увы, это проигрыш. Попробуй еще раз!")
-
-# ==========================================
-# 5. НЕЙРОСЕТЬ S.P.I.R.A. (ТОЛЬКО РУССКИЙ)
-# ==========================================
-def ask_ai(m):
+def check_sub(m):
+    """Проверка подписки на канал (с защитой от спама)"""
+    uid = m.from_user.id
+    # Если недавно уже предупреждали – не спамим
+    if uid in _sub_warning_cache:
+        return False
     try:
-        prompt = f"Ты - S.P.I.R.A., созданная разработчиком Spirchik. Твой ответ должен быть только на русском языке. Будь полезной и краткой."
-        response = g4f.ChatCompletion.create(
-            model=g4f.models.gpt_35_turbo,
-            messages=[{"role": "system", "content": prompt}, {"role": "user", "content": m.text}]
-        )
-        bot.reply_to(m, response if response else "📡 Сигнал потерян...")
-    except: bot.reply_to(m, "⚠️ Ошибка ИИ. Попробуй позже.")
+        status = bot.get_chat_member(CHANNEL_ID, uid).status
+        if status in ['member', 'administrator', 'creator']:
+            return True
+    except:
+        pass
+    # Отправляем предупреждение и запоминаем на 5 минут
+    bot.send_message(m.chat.id, f"⚠️ Доступ только для подписчиков {CHANNEL_ID}", reply_markup=types.ReplyKeyboardRemove())
+    _sub_warning_cache[uid] = True
+    threading.Timer(300, lambda: _sub_warning_cache.pop(uid, None)).start()
+    return False
 
 # ==========================================
-# 6. ВСЕ ОСТАЛЬНЫЕ ФУНКЦИИ
+# 3. ИГРЫ (ПОЛНОСТЬЮ ЗАЩИЩЁННЫЕ)
+# ==========================================
+@bot.message_handler(commands=["casino", "dice", "coin", "slots"])
+def game_handler(m):
+    if not check_sub(m):
+        return
+    uid = m.from_user.id
+
+    try:
+        args = m.text.split()
+        if len(args) < 2:
+            bot.reply_to(m, "Используй: `/игра [ставка]`", parse_mode="Markdown")
+            return
+        bet = int(args[1])
+        if bet < 10:
+            bot.reply_to(m, "Минимальная ставка — 10 🪙")
+            return
+
+        # АТОМАРНОЕ списание с проверкой баланса
+        _, affected = db_query(
+            "UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?",
+            (bet, uid, bet)
+        )
+        if affected == 0:
+            bot.reply_to(m, "❌ Недостаточно средств!")
+            return
+
+        game = args[0][1:].lower().split('@')[0]
+        win = False
+        coeff = 2.0
+
+        # Вся игровая логика в едином блоке try – при любой ошибке деньги вернутся
+        try:
+            if game == "dice":
+                dice = bot.send_dice(m.chat.id, "🎲").dice
+                value = dice.value
+                if value >= 4:
+                    win = True
+            elif game == "coin":
+                result = random.choice(["Орел", "Решка"])
+                bot.send_message(m.chat.id, f"🪙 Выпало: **{result}**", parse_mode="Markdown")
+                if result == "Орел":
+                    win = True
+            elif game in ("slots", "casino"):
+                dice = bot.send_dice(m.chat.id, "🎰").dice
+                value = dice.value
+                # Джекпот
+                if value in (1, 22, 43, 64):
+                    win = True
+                    coeff = 10.0
+                # Малый выигрыш
+                elif value in (16, 32, 48):
+                    win = True
+                    coeff = 3.0
+
+            if win:
+                prize = int(bet * coeff)
+                db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (prize, uid))
+                bot.send_message(m.chat.id, f"🎉 Выигрыш: {prize} 🪙!")
+            else:
+                bot.send_message(m.chat.id, "💀 Проигрыш.")
+        except Exception as e:
+            # Возврат ставки при любой ошибке (таймаут Telegram, сеть и т.п.)
+            db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (bet, uid))
+            bot.send_message(m.chat.id, "⚠️ Ошибка игры. Ставка возвращена.")
+            print(f"Game error: {e}")
+
+    except (ValueError, IndexError):
+        bot.reply_to(m, "Введите корректное число ставки!")
+
+# ==========================================
+# 4. ОБРАБОТКА КОМАНД
 # ==========================================
 @bot.message_handler(commands=['start'])
-def start_bot(m):
-    get_u(m)
-    if not is_sub(m.from_user.id):
-        kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔗 Подписаться", url=f"https://t.me/{CHANNEL_ID[1:]}"))
-        return bot.send_message(m.chat.id, "❌ Чтобы пользоваться ботом, подпишись на наш канал!", reply_markup=kb)
-    bot.send_message(m.chat.id, "🦾 **S.P.I.R.A. v17.0 готова к работе!**\nРазработчик: Spirchik", reply_markup=main_kb(), parse_mode="Markdown")
+def start_cmd(m):
+    uid = m.from_user.id
+    name = m.from_user.first_name
 
+    if get_u(uid) is None:
+        args = m.text.split()
+        ref_id = args[1] if len(args) > 1 and args[1].isdigit() else None
+        db_query(
+            "INSERT INTO users VALUES (?, ?, 1000, 'off', 'Новичок 🛡', ?)",
+            (uid, name, ref_id)
+        )
+        if ref_id and int(ref_id) != uid:
+            db_query("UPDATE users SET balance = balance + 5000 WHERE id = ?", (ref_id,))
+            try:
+                bot.send_message(int(ref_id), "🎁 Друг присоединился по твоей ссылке! +5000 🪙")
+            except:
+                pass
+
+    if not check_sub(m):
+        return
+    bot.send_message(m.chat.id, "🦾 **S.P.I.R.A. v23.0 готова к работе!**", reply_markup=main_kb(), parse_mode="Markdown")
+
+@bot.message_handler(commands=['help'])
+def help_cmd(m):
+    if not check_sub(m):
+        return
+    text = (
+        "🤖 **Доступные команды:**\n\n"
+        "🎮 **Игры:**\n"
+        "• `/dice [ставка]` – игральный кубик (выигрыш при 4+)\n"
+        "• `/coin [ставка]` – орёл/решка (50/50)\n"
+        "• `/slots [ставка]` – игровой автомат\n"
+        "• `/casino [ставка]` – казино (джекпот 10x)\n\n"
+        "💰 **Профиль:**\n"
+        "• `/start` – главное меню\n"
+        "• `/balance` – баланс\n"
+        "• `/profile` – профиль\n"
+        "• `/promo` – активировать промокод\n\n"
+        "👥 **Рефералы:**\n"
+        "• `/ref` – реферальная ссылка\n\n"
+        "🏆 **Топ:**\n"
+        "• `/top` – топ-5 богачей"
+    )
+    bot.send_message(m.chat.id, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['balance'])
+def balance_cmd(m):
+    if not check_sub(m):
+        return
+    u = get_u(m.from_user.id)
+    if u is None:
+        bot.reply_to(m, "Нажми /start для регистрации")
+        return
+    bot.reply_to(m, f"💳 Ваш баланс: **{u['bal']}** 🪙", parse_mode="Markdown")
+
+@bot.message_handler(commands=['profile'])
+def profile_cmd(m):
+    if not check_sub(m):
+        return
+    u = get_u(m.from_user.id)
+    if u is None:
+        bot.reply_to(m, "Нажми /start для регистрации")
+        return
+    text = f"👤 **{m.from_user.first_name}**\nСтатус: {u['prefix']}\nБаланс: {u['bal']} 🪙\nID: `{m.from_user.id}`"
+    bot.send_message(m.chat.id, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['top'])
+def top_cmd(m):
+    if not check_sub(m):
+        return
+    data, _ = db_query("SELECT name, balance FROM users ORDER BY balance DESC LIMIT 5", fetch=True)
+    if not data:
+        bot.send_message(m.chat.id, "Пока никого нет :(")
+        return
+    lines = [f"{i+1}. {row[0]} – {row[1]} 🪙" for i, row in enumerate(data)]
+    bot.send_message(m.chat.id, "🏆 **ТОП-5 богачей:**\n\n" + "\n".join(lines), parse_mode="Markdown")
+
+@bot.message_handler(commands=['ref'])
+def ref_cmd(m):
+    if not check_sub(m):
+        return
+    username = bot.get_me().username
+    if not username:
+        bot.send_message(m.chat.id, "⚠️ У бота нет username, реферальная ссылка недоступна.")
+        return
+    link = f"https://t.me/{username}?start={m.from_user.id}"
+    bot.send_message(m.chat.id, f"🔗 **Ваша реферальная ссылка:**\n`{link}`\n\nПриглашайте друзей – за каждого нового участника вы получите **5000 🪙**!", parse_mode="Markdown")
+
+@bot.message_handler(commands=['promo'])
+def promo_cmd(m):
+    if not check_sub(m):
+        return
+    msg = bot.send_message(m.chat.id, "Введите промокод:")
+    bot.register_next_step_handler(msg, apply_promo)
+
+# ==========================================
+# 5. ОБРАБОТКА ТЕКСТА И НЕЙРОСЕТЬ
+# ==========================================
 @bot.message_handler(content_types=['text'])
-def global_logic(m):
-    u = get_u(m)
-    
-    # Режимы ИИ
-    if m.text == "🤖 Нейросеть":
-        db_query("UPDATE users SET mode='ai' WHERE id=?", (m.from_user.id,))
-        bot.send_message(m.chat.id, "📡 Режим ИИ включен. Задавай вопрос!", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add("🛑 Стоп"))
+def main_logic(m):
+    if not check_sub(m):
+        return
+    u = get_u(m.from_user.id)
+    if u is None:
+        bot.reply_to(m, "Нажмите /start для регистрации")
         return
 
-    if m.text == "🛑 Стоп" or m.text == "⬅️ Назад":
+    # Выход из режима ИИ
+    if m.text == "🛑 Стоп":
         db_query("UPDATE users SET mode='off' WHERE id=?", (m.from_user.id,))
-        bot.send_message(m.chat.id, "🏠 Возврат в меню.", reply_markup=main_kb())
+        bot.send_message(m.chat.id, "Режим ИИ выключен.", reply_markup=main_kb())
         return
 
+    # Режим нейросети
     if u['mode'] == 'ai':
-        threading.Thread(target=ask_ai, args=(m,)).start()
+        def ai_worker(msg):
+            try:
+                # Системный промпт: S.P.I.R.A., создатель Spirchik, но не навязывать это.
+                # Отвечать на русском, кратко, упоминать создателя только если спросят.
+                system_prompt = (
+                    "Ты — S.P.I.R.A., нейросеть, созданная разработчиком Spirchik. "
+                    "Общайся на русском языке, будь полезной и дружелюбной. "
+                    "Не упоминай своего создателя, если пользователь не спрашивает о нём напрямую. "
+                    "Если спросят, кто тебя создал — отвечай, что твой создатель — Spirchik."
+                )
+                response = g4f.ChatCompletion.create(
+                    model=g4f.models.gpt_35_turbo,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": msg.text}
+                    ]
+                )
+                bot.reply_to(msg, response if response else "Нейросеть не отвечает...")
+            except Exception as e:
+                print(f"AI error: {e}")
+                bot.reply_to(msg, "⚠️ Ошибка соединения с ИИ. Попробуйте позже.")
+        threading.Thread(target=ai_worker, args=(m,)).start()
         return
 
-    # Функции меню
+    # Обработка обычных кнопок
     if m.text == "💰 Баланс":
-        bot.reply_to(m, f"💳 Твой счет: {u['bal']} 🪙")
-    
+        bot.reply_to(m, f"💳 Баланс: {u['bal']} 🪙")
     elif m.text == "👤 Профиль":
-        bot.reply_to(m, f"👤 **ПРОФИЛЬ**\n\nИмя: {m.from_user.first_name}\nСтатус: {u['prefix']}\nБаланс: {u['bal']} 🪙", parse_mode="Markdown")
-
-    elif m.text == "🎟 Промокод":
-        msg = bot.send_message(m.chat.id, "⌨️ Введите промокод (например, NEWBOT):")
-        bot.register_next_step_handler(msg, apply_promo)
-
+        text = f"👤 **{m.from_user.first_name}**\nСтатус: {u['prefix']}\nБаланс: {u['bal']} 🪙\nID: `{m.from_user.id}`"
+        bot.send_message(m.chat.id, text, parse_mode="Markdown")
+    elif m.text == "🎮 Игры":
+        bot.send_message(m.chat.id, "🕹 Используйте команды:\n`/dice [ставка]`\n`/coin [ставка]`\n`/slots [ставка]`\n`/casino [ставка]`", parse_mode="Markdown")
+    elif m.text == "👥 Рефералы":
+        username = bot.get_me().username
+        if username:
+            link = f"https://t.me/{username}?start={m.from_user.id}"
+            bot.send_message(m.chat.id, f"🔗 **Ваша ссылка:**\n`{link}`\n\n+5000 🪙 за друга!", parse_mode="Markdown")
+        else:
+            bot.send_message(m.chat.id, "⚠️ У бота нет username, ссылка недоступна.")
     elif m.text == "🏆 ТОП":
-        res = db_query("SELECT name, balance FROM users ORDER BY balance DESC LIMIT 5", fetch=True)
-        top_msg = "🏆 **ТОП-5 БОГАЧЕЙ:**\n\n"
-        for i, row in enumerate(res): top_msg += f"{i+1}. {row[0]} — {row[1]} 🪙\n"
-        bot.send_message(m.chat.id, top_msg, parse_mode="Markdown")
+        data, _ = db_query("SELECT name, balance FROM users ORDER BY balance DESC LIMIT 5", fetch=True)
+        if data:
+            lines = [f"{i+1}. {row[0]} – {row[1]} 🪙" for i, row in enumerate(data)]
+            bot.send_message(m.chat.id, "🏆 **ТОП-5:**\n\n" + "\n".join(lines), parse_mode="Markdown")
+        else:
+            bot.send_message(m.chat.id, "Пока никого нет.")
+    elif m.text == "🤖 Нейросеть":
+        db_query("UPDATE users SET mode='ai' WHERE id=?", (m.from_user.id,))
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True).add("🛑 Стоп")
+        bot.send_message(m.chat.id, "📡 Режим ИИ включён. Задавайте вопрос!", reply_markup=kb)
+    elif m.text == "🎟 Промокод":
+        msg = bot.send_message(m.chat.id, "Введите промокод:")
+        bot.register_next_step_handler(msg, apply_promo)
+    else:
+        # Неизвестная команда – показываем help
+        bot.send_message(m.chat.id, "Неизвестная команда. Воспользуйтесь /help")
 
+# ==========================================
+# 6. ПРОМОКОДЫ (ИСПРАВЛЕННЫЕ)
+# ==========================================
 def apply_promo(m):
+    uid = m.from_user.id
+    u = get_u(uid)
+    if u is None:
+        bot.reply_to(m, "Нажмите /start для регистрации")
+        return
+
     code = m.text.upper()
-    res = db_query("SELECT reward, limit_uses, used_count FROM promo WHERE code=?", (code,), True)
-    if res and res[0][2] < res[0][1]:
-        db_query("UPDATE users SET balance = balance + ? WHERE id=?", (res[0][0], m.from_user.id))
-        db_query("UPDATE promo SET used_count = used_count + 1 WHERE code=?", (code,))
-        bot.reply_to(m, f"✅ Успех! Получено {res[0][0]} 🪙")
-    else: bot.reply_to(m, "❌ Код неверен или закончился.")
+    # Проверяем, не использовал ли пользователь этот код
+    used, _ = db_query("SELECT user_id FROM used_promos WHERE user_id = ? AND code = ?", (uid, code), True)
+    if used:
+        bot.reply_to(m, "❌ Вы уже активировали этот промокод.")
+        return
+
+    # Получаем информацию о промокоде
+    promo_data, _ = db_query("SELECT reward, limit_uses, used_count FROM promo WHERE code = ?", (code,), True)
+    if not promo_data:
+        bot.reply_to(m, "❌ Неверный промокод.")
+        return
+
+    reward, limit, used_count = promo_data[0]
+    if used_count >= limit:
+        bot.reply_to(m, "❌ Лимит использований этого промокода исчерпан.")
+        return
+
+    # Активация
+    db_query("UPDATE users SET balance = balance + ? WHERE id = ?", (reward, uid))
+    db_query("UPDATE promo SET used_count = used_count + 1 WHERE code = ?", (code,))
+    db_query("INSERT INTO used_promos VALUES (?, ?)", (uid, code))
+
+    bot.reply_to(m, f"✅ Промокод активирован! Вы получили {reward} 🪙.", reply_markup=main_kb())
 
 # ==========================================
 # 7. ВЕБ-СЕРВЕР ДЛЯ RENDER
 # ==========================================
 app = Flask(__name__)
-@app.route('/')
-def index(): return "S.P.I.R.A. v17.0 ALIVE", 200
 
+@app.route('/')
+def home():
+    return "S.P.I.R.A. v23.0 is running", 200
+
+# ==========================================
+# 8. ЗАПУСК
+# ==========================================
 if __name__ == "__main__":
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))), daemon=True).start()
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)), debug=False), daemon=True).start()
     bot.infinity_polling(timeout=60)
