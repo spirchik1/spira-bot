@@ -1,4 +1,5 @@
 pyTelegramBotAPI
 requests
 flask
+g4f
 gunicorn
