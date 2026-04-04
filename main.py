@@ -4,9 +4,9 @@ from flask import Flask
 import g4f
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ
+# 1. КОНФИГУРАЦИЯ (ОБНОВЛЕННЫЙ ТОКЕН)
 # ==========================================
-BOT_TOKEN = "8632196470:AAGILk4QMOvR6BeimSxxA5aQDlUmmKt8ejc"
+BOT_TOKEN = "8632196470:AAGFnm-TikkUzMcNknpzuY7QXwT2C3-Fw3g"
 BOT_USERNAME = "spiraaiofficial_bot" 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True, num_threads=15)
 
@@ -34,7 +34,7 @@ def get_u(m):
     return {"bal": row[0], "mode": row[1], "prefix": row[2]}
 
 # ==========================================
-# 2. МЕНЮ (КНОПКИ НА РУССКОМ)
+# 2. ИНТЕРФЕЙС (КНОПКИ НА РУССКОМ)
 # ==========================================
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -50,7 +50,7 @@ def game_menu():
     return markup
 
 # ==========================================
-# 3. ЛОГИКА ИИ
+# 3. ЛОГИКА НЕЙРОСЕТИ
 # ==========================================
 def ask_ai(message):
     try:
@@ -61,12 +61,12 @@ def ask_ai(message):
         if response:
             bot.reply_to(message, response)
         else:
-            bot.reply_to(message, "📡 Сигнал потерян.")
+            bot.reply_to(message, "📡 Сигнал ядра потерян.")
     except:
-        bot.reply_to(message, "⚠️ Система ИИ на перезагрузке.")
+        bot.reply_to(message, "⚠️ Система ИИ на перезагрузке. Игры доступны.")
 
 # ==========================================
-# 4. ОБРАБОТЧИКИ КОМАНД (АНГЛИЙСКИЙ)
+# 4. КОМАНДЫ (АНГЛИЙСКИЙ)
 # ==========================================
 
 @bot.message_handler(commands=['start', 'help'])
@@ -74,13 +74,13 @@ def help_cmd(m):
     get_u(m)
     text = (
         "🤖 **S.P.I.R.A. Системный терминал**\n\n"
-        "**Команды управления:**\n"
+        "**Команды:**\n"
         "/ai — Включить нейросеть\n"
         "/stop — Выключить нейросеть\n"
-        "/profile — Мой профиль\n"
-        "/balance — Проверить счет\n"
-        "/shop — Магазин статусов\n\n"
-        "**Игровые команды:**\n"
+        "/profile — Профиль\n"
+        "/balance — Счет\n"
+        "/shop — Магазин\n\n"
+        "**Игры:**\n"
         "/casino [ставка]\n"
         "/basket [ставка]\n"
         "/football [ставка]\n"
@@ -92,52 +92,52 @@ def help_cmd(m):
 def ai_on(m):
     cursor.execute("UPDATE users SET mode='ai' WHERE id=?", (m.from_user.id,))
     conn.commit()
-    bot.reply_to(m, "📡 Режим ИИ активирован. Теперь я отвечаю на твои сообщения.")
+    bot.reply_to(m, "📡 Режим ИИ активирован.")
 
 @bot.message_handler(commands=['stop'])
 def ai_off(m):
     cursor.execute("UPDATE users SET mode='off' WHERE id=?", (m.from_user.id,))
     conn.commit()
-    bot.reply_to(m, "🔌 Нейросеть отключена. Перехожу в режим ожидания.")
+    bot.reply_to(m, "🔌 Режим ИИ отключен.")
 
 @bot.message_handler(commands=['profile'])
-def profile(m):
+def profile_cmd(m):
     u = get_u(m)
     bot.reply_to(m, f"👤 **ПРОФИЛЬ:**\n🆔 ID: `{m.from_user.id}`\n🏷 Статус: {u['prefix']}\n💰 Баланс: {u['bal']} 🪙", parse_mode="Markdown")
 
 @bot.message_handler(commands=['casino', 'basket', 'football', 'dice'])
-def game_handler(m):
+def games(m):
     u = get_u(m)
     cmd = m.text.split()
     if len(cmd) < 2:
-        return bot.reply_to(m, "⚠️ Введи ставку. Пример: `/casino 100`", parse_mode="Markdown")
+        return bot.reply_to(m, "⚠️ Укажи ставку. Пример: `/casino 100`", parse_mode="Markdown")
     
-    amount = int(cmd[1])
-    if u['bal'] < amount: return bot.reply_to(m, "❌ Мало монет.")
-    
-    cursor.execute("UPDATE users SET balance = balance - ? WHERE id=?", (amount, m.from_user.id))
-    
-    emo_map = {"/casino": "🎰", "/basket": "🏀", "/football": "⚽", "/dice": "🎲"}
-    emo = emo_map[cmd[0]]
-    
-    res = bot.send_dice(m.chat.id, emoji=emo).dice.value
-    time.sleep(3.5)
-    
-    win = amount * 10 if res in [1, 22, 43, 64] and emo == "🎰" else (int(amount * 1.8) if res >= 4 else 0)
-    if win > 0:
-        cursor.execute("UPDATE users SET balance = balance + ? WHERE id=?", (win, m.from_user.id))
-        bot.send_message(m.chat.id, f"🎉 Плюс {win} 🪙!")
-    else: bot.send_message(m.chat.id, "💀 Ставка проиграна.")
-    conn.commit()
+    try:
+        amount = int(cmd[1])
+        if u['bal'] < amount: return bot.reply_to(m, "❌ Недостаточно средств.")
+        
+        cursor.execute("UPDATE users SET balance = balance - ? WHERE id=?", (amount, m.from_user.id))
+        emo_map = {"/casino": "🎰", "/basket": "🏀", "/football": "⚽", "/dice": "🎲"}
+        emo = emo_map[cmd[0]]
+        
+        res = bot.send_dice(m.chat.id, emoji=emo).dice.value
+        time.sleep(3.5)
+        
+        win = amount * 10 if res in [1, 22, 43, 64] and emo == "🎰" else (int(amount * 1.8) if res >= 4 else 0)
+        if win > 0:
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE id=?", (win, m.from_user.id))
+            bot.send_message(m.chat.id, f"🎉 Выигрыш: +{win} 🪙!")
+        else: bot.send_message(m.chat.id, "💀 Проигрыш.")
+        conn.commit()
+    except: bot.reply_to(m, "❌ Ошибка формата ставки.")
 
 # ==========================================
-# 5. ОБРАБОТКА КНОПОК (РУССКИЙ)
+# 5. ТЕКСТОВЫЙ ОБРАБОТЧИК (РУССКИЙ)
 # ==========================================
 @bot.message_handler(content_types=['text'])
 def text_handler(m):
     u = get_u(m)
     
-    # Кнопки меню перенаправляют на команды
     if m.text == "🤖 Нейросеть":
         ai_on(m)
     elif m.text == "🎮 Игровой зал":
@@ -145,28 +145,26 @@ def text_handler(m):
     elif m.text == "💰 Баланс":
         bot.reply_to(m, f"💰 Баланс: {u['bal']} 🪙")
     elif m.text == "👤 Кто я":
-        profile(m)
-    elif m.text == "🎰 Казино":
-        bot.reply_to(m, "Используй команду: `/casino [ставка]`", parse_mode="Markdown")
-    elif m.text == "🏀 Баскет":
-        bot.reply_to(m, "Используй команду: `/basket [ставка]`", parse_mode="Markdown")
-    elif m.text == "⚽ Футбол":
-        bot.reply_to(m, "Используй команду: `/football [ставка]`", parse_mode="Markdown")
-    elif m.text == "🎲 Кубик":
-        bot.reply_to(m, "Используй команду: `/dice [ставка]`", parse_mode="Markdown")
+        profile_cmd(m)
+    elif m.text in ["🎰 Казино", "🏀 Баскет", "⚽ Футбол", "🎲 Кубик"]:
+        bot.reply_to(m, "Используй команду: `/casino [ставка]` (или другую)", parse_mode="Markdown")
     elif m.text == "⬅️ Назад":
         bot.send_message(m.chat.id, "Главное меню:", reply_markup=main_menu())
+    elif m.text == "➕ Добавить в чат":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🚀 Добавить", url=f"https://t.me/{BOT_USERNAME}?startgroup=true"))
+        bot.send_message(m.chat.id, "Нажми кнопку:", reply_markup=markup)
     
-    # Ответ ИИ только если режим включен и это не кнопка
+    # ИИ отвечает только если режим включен и это приватный чат
     elif u['mode'] == 'ai' and m.chat.type == 'private':
         threading.Thread(target=ask_ai, args=(m,)).start()
 
 # ==========================================
-# 6. ЗАПУСК
+# 6. ВЕБ-СЕРВЕР (ДЛЯ RENDER)
 # ==========================================
 app = Flask(__name__)
 @app.route('/')
-def h(): return "S.P.I.R.A. ONLINE", 200
+def h(): return "S.P.I.R.A. ULTIMATE LIVE", 200
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))), daemon=True).start()
