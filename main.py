@@ -512,3 +512,26 @@ def guild_cmd(m):
         if mem:
             bot.reply_to(m, "Вы уже в этой гильдии")
             r
+# ==========================================
+# 6. ВЕБ-СЕРВЕР И ЗАПУСК (ДЛЯ RENDER)
+# ==========================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "S.P.I.R.A. is running!", 200
+
+if __name__ == "__main__":
+    # 1. Запуск воркера турниров в фоне
+    t_thread = threading.Thread(target=tournament_worker, daemon=True)
+    t_thread.start()
+
+    # 2. Запуск БОТА в фоновом потоке (Поменяли местами!)
+    print("🤖 Бот запускается...")
+    bot_thread = threading.Thread(target=lambda: bot.infinity_polling(timeout=60), daemon=True)
+    bot_thread.start()
+
+    # 3. Запуск веб-сервера Flask в ГЛАВНОМ потоке
+    # Теперь Render гарантированно увидит этот порт и не убьет процесс
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
