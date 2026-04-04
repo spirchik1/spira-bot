@@ -4,7 +4,7 @@ from flask import Flask
 import g4f
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ (ОБНОВЛЕННЫЙ ТОКЕН)
+# 1. КОНФИГУРАЦИЯ (ВАШ НОВЫЙ ТОКЕН)
 # ==========================================
 BOT_TOKEN = "8632196470:AAGILk4QMOvR6BeimSxxA5aQDlUmmKt8ejc"
 BOT_USERNAME = "spiraaiofficial_bot" 
@@ -39,20 +39,18 @@ def get_u(m):
 def apply_group_prefix(m, prefix):
     if m.chat.type in ['group', 'supergroup']:
         try:
-            # Даем права (пустые), чтобы можно было поставить Custom Title
             bot.promote_chat_member(m.chat.id, m.from_user.id, can_manage_chat=False)
             bot.set_chat_administrator_custom_title(m.chat.id, m.from_user.id, prefix)
         except:
-            pass # Если бот не админ или юзер — создатель чата
+            pass
 
 # ==========================================
-# 3. УМНЫЙ ИИ (С ЗАЩИТОЙ ОТ ТОРМОЗОВ)
+# 3. ИИ
 # ==========================================
 def ask_ai(message):
     try:
-        # Пытаемся получить ответ от GPT-4 через g4f
         response = g4f.ChatCompletion.create(
-            model=g4f.models.default, # Автовыбор лучшего провайдера
+            model=g4f.models.default,
             messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": message.text}],
         )
         if response:
@@ -65,17 +63,14 @@ def ask_ai(message):
 # ==========================================
 # 4. ОБРАБОТЧИКИ
 # ==========================================
-def main_menu():
+@bot.message_handler(commands=['start'])
+def st(m):
+    get_u(m)
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🤖 Нейросеть", "🎮 Игровой зал")
     markup.add("💰 Баланс", "🏆 ТОП", "🛒 Магазин")
     markup.add("👤 Кто я", "➕ Добавить в чат")
-    return markup
-
-@bot.message_handler(commands=['start'])
-def st(m):
-    get_u(m)
-    bot.send_message(m.chat.id, "🤖 **S.P.I.R.A. Активирована**\nТокен обновлен. Протоколы защиты включены.", reply_markup=main_menu(), parse_mode="Markdown")
+    bot.send_message(m.chat.id, "🤖 **S.P.I.R.A. Активирована**", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "👤 Кто я")
 def profile(m):
@@ -135,9 +130,12 @@ def global_handler(m):
         cursor.execute("UPDATE users SET mode='ai' WHERE id=?"); conn.commit()
         bot.send_message(m.chat.id, "📡 Режим ИИ включен. Спрашивай!")
     elif m.text == "⬅️ Назад":
-        bot.send_message(m.chat.id, "Главное меню:", reply_markup=main_menu())
-    elif m.text == "💰 Баланс":
-        bot.send_message(m.chat.id, f"💰 Ваш баланс: {u['bal']} 🪙")
+        # Создаем разметку прямо здесь, чтобы не зависеть от других функций
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("🤖 Нейросеть", "🎮 Игровой зал")
+        markup.add("💰 Баланс", "🏆 ТОП", "🛒 Магазин")
+        markup.add("👤 Кто я", "➕ Добавить в чат")
+        bot.send_message(m.chat.id, "Главное меню:", reply_markup=markup)
     elif m.text == "➕ Добавить в чат":
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🚀 Добавить", url=f"https://t.me/{BOT_USERNAME}?startgroup=true"))
