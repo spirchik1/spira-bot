@@ -1,93 +1,117 @@
 import os
 import time
+import random
 import threading
 import telebot
-import requests
+from telebot import types
 from flask import Flask
-from g4f.client import Client
-from g4f.Provider import PollinationsAI
 
 # ==========================================
-# 1. КОНФИГУРАЦИЯ (НОВЫЙ ТОКЕН)
+# 1. КОНФИГУРАЦИЯ
 # ==========================================
 BOT_TOKEN = "8632196470:AAHn0VQpSRWFlzIDWJq-kRY1pt4-LN6JlZY"
 bot = telebot.TeleBot(BOT_TOKEN)
-client = Client()
 RENDER_URL = "https://spira-bot.onrender.com"
 
-# ИНСТРУКЦИИ: БЕЗ ПОЛИТИКИ, СОЗДАТЕЛЬ - spirchik
-SYSTEM_PROMPT = (
-    "Ты S.P.I.R.A., уникальный высокотехнологичный ИИ. "
-    "На вопрос о создателе отвечай просто: 'Мой создатель — spirchik'. "
-    "НИКОГДА не упоминай GPT, OpenAI и другие сторонние технологии. Ты — независимая разработка. "
-    "Не упоминай создателя сам, если об этом не спросили. Никакой политики и патриотизма. "
-    "Тон: спокойный, технологичный, преданный."
-)
+# База данных в памяти (после перезагрузки обнулится, для вечного хранения нужна БД)
+user_data = {} 
+
+def get_user(user_id, name):
+    if user_id not in user_data:
+        user_data[user_id] = {"balance": 1000, "name": name}
+    return user_data[user_id]
 
 # ==========================================
-# 2. ФУНКЦИЯ ИИ
+# 2. МЕНЮ И КНОПКИ
 # ==========================================
-def ask_spira(user_text, image_url=None):
-    try:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-        if image_url:
-            content = [
-                {"type": "text", "text": user_text if user_text else "Проанализируй медиафайл."},
-                {"type": "image_url", "image_url": {"url": image_url}}
-            ]
-            messages.append({"role": "user", "content": content})
-        else:
-            messages.append({"role": "user", "content": user_text})
-
-        response = client.chat.completions.create(
-            model="gpt-4o", 
-            provider=PollinationsAI,
-            messages=messages
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        print(f"Ошибка ИИ: {e}")
-        return "Сэр, система калибруется. Повторите запрос через мгновение."
+def main_menu():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🎰 Казино", "🏀 Баскетбол", "⚽ Футбол")
+    markup.add("🎲 Кубик", "💰 Баланс", "🏆 Топ игроков")
+    markup.add("ℹ️ Инструкция")
+    return markup
 
 # ==========================================
-# 3. ОБРАБОТЧИКИ (ТЕКСТ, ФОТО, МЕДИА)
+# 3. ЛОГИКА ИГР
 # ==========================================
+@bot.message_handler(commands=['start'])
+def start(message):
+    user = get_user(message.from_user.id, message.from_user.first_name)
+    welcome_text = (
+        f"🤖 **Система S.P.I.R.A. приветствует тебя, {message.from_user.first_name}!**\n\n"
+        "Я — твой игровой и технологичный помощник.\n"
+        "Здесь ты можешь зарабатывать SpiraCoins и соревноваться с другими.\n\n"
+        "📍 **Твой баланс:** 1000 🪙\n"
+        "📍 **Создатель:** spirchik\n\n"
+        "Выбирай игру в меню ниже!"
+    )
+    bot.send_message(message.chat.id, welcome_text, reply_markup=main_menu(), parse_mode="Markdown")
 
-@bot.message_handler(content_types=['text'])
-def text_handler(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    bot.reply_to(message, ask_spira(message.text))
+@bot.message_handler(func=lambda message: message.text == "💰 Баланс")
+def check_balance(message):
+    user = get_user(message.from_user.id, message.from_user.first_name)
+    bot.reply_to(message, f"💳 Твой текущий счет: **{user['balance']} SpiraCoins**", parse_mode="Markdown")
 
-@bot.message_handler(content_types=['photo'])
-def photo_handler(message):
-    bot.send_chat_action(message.chat.id, 'typing')
-    file_info = bot.get_file(message.photo[-1].file_id)
-    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
-    bot.reply_to(message, ask_spira(message.caption, file_url))
+@bot.message_handler(func=lambda message: message.text == "🏆 Топ игроков")
+def leaderboard(message):
+    top = sorted(user_data.items(), key=lambda x: x[1]['balance'], reverse=True)[:10]
+    text = "🏆 **ГЛОБАЛЬНАЯ ТАБЛИЦА ЛИДЕРОВ** 🏆\n\n"
+    for i, (uid, data) in enumerate(top, 1):
+        text += f"{i}. {data['name']} — {data['balance']} 🪙\n"
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
-@bot.message_handler(content_types=['voice', 'video_note'])
-def voice_handler(message):
-    bot.reply_to(message, "Принял медиафайл. Сенсоры анализируют входящий поток...")
+# Универсальный обработчик игр со стикерами
+@bot.message_handler(func=lambda message: message.text in ["🎰 Казино", "🏀 Баскетбол", "⚽ Футбол", "🎲 Кубик"])
+def play_game(message):
+    user = get_user(message.from_user.id, message.from_user.first_name)
+    if user['balance'] < 100:
+        bot.reply_to(message, "⚠️ Недостаточно SpiraCoins! Минимум для игры — 100.")
+        return
+
+    user['balance'] -= 100
+    emoji = {"🎰 Казино": "🎰", "🏀 Баскетбол": " basketball", "⚽ Футбол": "⚽", "🎲 Кубик": "🎲"}[message.text]
+    
+    # Отправляем игровой стикер
+    msg = bot.send_dice(message.chat.id, emoji=emoji if message.text != "🏀 Баскетбол" else "🏀")
+    value = msg.dice.value
+
+    time.sleep(4) # Ждем анимацию
+
+    win = 0
+    if message.text == "🎰 Казино":
+        if value in [1, 22, 43, 64]: # Джекпот (три семерки или одинаковые)
+            win = 1000
+        elif value in [16, 32, 48]: win = 300
+    elif message.text in ["🏀 Баскетбол", "⚽ Футбол"]:
+        if value >= 4: win = 250 # Попадание
+    elif message.text == "🎲 Кубик":
+        if value >= 4: win = 200
+
+    if win > 0:
+        user['balance'] += win
+        bot.send_message(message.chat.id, f"🎉 **ПОБЕДА!** Ты выиграл {win} 🪙\nБаланс: {user['balance']}")
+    else:
+        bot.send_message(message.chat.id, f"❌ Проигрыш. Повезет в следующий раз!\nБаланс: {user['balance']}")
+
+@bot.message_handler(func=lambda message: message.text == "ℹ️ Инструкция")
+def info(message):
+    text = (
+        "📖 **ИНСТРУКЦИЯ S.P.I.R.A.**\n\n"
+        "1. Каждая ставка стоит 100 🪙.\n"
+        "2. В **Казино** самый большой куш.\n"
+        "3. В **Спорте** шансы 50/50.\n"
+        "4. Весь прогресс сохраняется в системе.\n\n"
+        "Удачи, игрок!"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
 # ==========================================
-# 4. ВЕБ-СЕРВЕР И ЗАПУСК
+# 4. СЕРВЕР И ЗАПУСК
 # ==========================================
 app = Flask(__name__)
 @app.route('/')
-def home(): return "S.P.I.R.A. 2.0 ACTIVE", 200
-
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+def home(): return "S.P.I.R.A. GAMES ONLINE", 200
 
 if __name__ == "__main__":
-    threading.Thread(target=run_web, daemon=True).start()
-    print("--- S.P.I.R.A. ЗАПУЩЕН С НОВЫМ ТОКЕНОМ ---")
-    
-    # Infinity polling с обработкой ошибок для стабильности
-    while True:
-        try:
-            bot.infinity_polling(timeout=20, long_polling_timeout=10)
-        except Exception as e:
-            print(f"Ошибка пуллинга: {e}")
-            time.sleep(5)
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080))), daemon=True).start()
+    bot.infinity_polling()
