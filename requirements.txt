@@ -2,6 +2,5 @@ pyTelegramBotAPI
 requests
 flask
 g4f
-phonenumbers
 gunicorn
 Pillow
