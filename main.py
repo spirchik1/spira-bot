@@ -1,5 +1,4 @@
 import os
-import sys
 import threading
 import sqlite3
 import random
@@ -14,22 +13,30 @@ import telebot
 from telebot import types
 from gtts import gTTS
 
-# Настройка логирования
+# Импортируем g4f правильно (проверяем версию)
+try:
+    import g4f
+    # Проверяем, есть ли атрибут models
+    if hasattr(g4f, 'models'):
+        GPT_MODEL = getattr(g4f.models, 'gpt_35_turbo', None)
+        if GPT_MODEL is None:
+            GPT_MODEL = "gpt-3.5-turbo"
+    else:
+        GPT_MODEL = "gpt-3.5-turbo"
+except ImportError:
+    GPT_MODEL = None
+    print("g4f not installed")
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ==========================================
-# 1. КОНФИГУРАЦИЯ
-# ==========================================
 TOKEN = "8632196470:AAEwN-tb803AADn5788H-NM8acHibh8oOTU"
-ADMIN_ID = 8632196470  # Замените на свой Telegram ID (узнайте у @userinfobot)
+ADMIN_ID = 8632196470
 CHANNEL_ID = "@spiraofficial"
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
 
-# ==========================================
-# 2. БАЗА ДАННЫХ
-# ==========================================
+# ======================== БАЗА ДАННЫХ ========================
 def db_query(query, params=(), fetch=False):
     conn = None
     try:
@@ -49,7 +56,7 @@ def db_query(query, params=(), fetch=False):
         if conn:
             conn.close()
 
-# Создание всех таблиц (упрощённые, но основные)
+# Создание всех таблиц (полные)
 db_query("""CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY, name TEXT, balance INTEGER, mode TEXT, prefix TEXT,
     ref_id INTEGER, level INTEGER DEFAULT 1, exp INTEGER DEFAULT 0,
@@ -75,16 +82,15 @@ db_query("CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)")
 
 # Начальные данные
 db_query("INSERT OR IGNORE INTO shop_items VALUES ('boost1','Буст +20%',5000,'boost','win_chance+20')")
-db_query("INSERT OR IGNORE INTO cases VALUES ('case1','Обычный кейс',5000,'[{\"item\":\"boost1\",\"prob\":1}]')")
+db_query("INSERT OR IGNORE INTO shop_items VALUES ('skin_gold','Золотой кубик',10000,'skin','dice_emoji=🎲✨')")
+db_query("INSERT OR IGNORE INTO cases VALUES ('case1','Обычный кейс',5000,'[{\"item\":\"boost1\",\"prob\":0.7},{\"item\":\"skin_gold\",\"prob\":0.3}]')")
 for q in [(1,'Сыграй 5 игр','play_games',5,1000,50), (2,'Выиграй 3 игры','win_games',3,2000,100)]:
     db_query("INSERT OR IGNORE INTO quests VALUES (?,?,?,?,?,?)", q)
 db_query("INSERT OR IGNORE INTO promo VALUES ('MEGA2024',10000,50,0)")
 
 logger.info("База данных инициализирована")
 
-# ==========================================
-# 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ==========================================
+# ======================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ========================
 def get_u(uid):
     res, _ = db_query("SELECT balance, mode, prefix, level, exp, lang FROM users WHERE id=?", (uid,), True)
     if res:
@@ -107,6 +113,16 @@ def update_stats(uid, game, win, bet=0):
     total_games = (stats[0][1] or 0)+1
     total_wins = (stats[0][2] or 0)+(1 if win else 0)
     db_query(f"UPDATE stats SET total_games=?, total_wins=?, game_{game}_wins = game_{game}_wins + ? WHERE user_id=?", (total_games, total_wins, 1 if win else 0, uid))
+    # Квесты
+    if win:
+        db_query("UPDATE user_quests SET progress = progress + 1 WHERE user_id=? AND quest_id IN (SELECT id FROM quests WHERE goal_type='win_games') AND completed=0", (uid,))
+    db_query("UPDATE user_quests SET progress = progress + 1 WHERE user_id=? AND quest_id IN (SELECT id FROM quests WHERE goal_type='play_games') AND completed=0", (uid,))
+    qs, _ = db_query("SELECT q.id, q.reward_coins, q.reward_exp FROM user_quests uq JOIN quests q ON uq.quest_id=q.id WHERE uq.user_id=? AND uq.completed=0 AND uq.progress >= q.goal_count", (uid,), True)
+    for qid, coins, exp in qs:
+        db_query("UPDATE user_quests SET completed=1 WHERE user_id=? AND quest_id=?", (uid, qid))
+        db_query("UPDATE users SET balance = balance + ?, exp = exp + ? WHERE id=?", (coins, exp, uid))
+        try: bot.send_message(uid, f"✅ Задание выполнено! +{coins}🪙 +{exp}⭐")
+        except: pass
 
 def check_sub(m):
     try:
@@ -124,36 +140,14 @@ def main_kb():
     markup.add("🏟 Турнир", "⚔️ Аукцион", "📜 Задания", "🏛 Гильдия")
     return markup
 
-# ==========================================
-# 4. ОБРАБОТЧИКИ КОМАНД И КНОПОК
-# ==========================================
-@bot.message_handler(commands=['start'])
-def start_cmd(m):
-    uid = m.from_user.id
-    u = get_u(uid)
-    if not u:
-        ref = None
-        args = m.text.split()
-        if len(args)>1 and args[1].isdigit(): ref = args[1]
-        db_query("INSERT INTO users (id, name, balance, ref_id) VALUES (?,?,?,?)", (uid, m.from_user.first_name, 5000, ref))
-        if ref and int(ref)!=uid:
-            db_query("UPDATE users SET balance = balance + 5000 WHERE id=?", (ref,))
-            try: bot.send_message(ref, "🎁 +5000 🪙 за реферала!")
-            except: pass
-        for qid in [1,2]:
-            db_query("INSERT OR IGNORE INTO user_quests (user_id, quest_id) VALUES (?,?)", (uid, qid))
-    if not check_sub(m): return
-    bot.send_message(m.chat.id, "🦾 S.P.I.R.A. v27.0", reply_markup=main_kb())
-
-# Обработчик кнопки "🎮 Игры"
+# ======================== ИГРЫ (INLINE) ========================
 @bot.message_handler(func=lambda m: m.text == "🎮 Игры")
 def games_menu(m):
-    text = "🎲 Выберите игру и сумму ставки:\n\n"
     games = ["dice", "coin", "slots", "casino", "poker", "blackjack", "wheel", "scratch"]
     markup = types.InlineKeyboardMarkup(row_width=2)
     for g in games:
         markup.add(types.InlineKeyboardButton(g.capitalize(), callback_data=f"game_{g}"))
-    bot.send_message(m.chat.id, text, reply_markup=markup)
+    bot.send_message(m.chat.id, "🎲 Выберите игру:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("game_"))
 def game_callback(c):
@@ -161,7 +155,7 @@ def game_callback(c):
     markup = types.InlineKeyboardMarkup(row_width=2)
     for bet in [100, 500, 1000, 5000]:
         markup.add(types.InlineKeyboardButton(f"{bet} 🪙", callback_data=f"bet_{game}_{bet}"))
-    bot.edit_message_text(f"Ставка для игры {game}:", c.message.chat.id, c.message.message_id, reply_markup=markup)
+    bot.edit_message_text(f"Ставка для {game}:", c.message.chat.id, c.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("bet_"))
 def bet_callback(c):
@@ -187,6 +181,7 @@ def bet_callback(c):
         elif game in ("slots","casino"):
             val = bot.send_dice(c.message.chat.id, "🎰").dice.value
             if val in (1,22,43,64): win, coeff = True, 10.0
+            elif val in (16,32,48): win, coeff = True, 3.0
         elif game in ("poker","blackjack"):
             player = random.randint(1,10)+random.randint(1,10)
             dealer = random.randint(1,10)+random.randint(1,10)
@@ -214,7 +209,7 @@ def bet_callback(c):
         bot.send_message(c.message.chat.id, f"Ошибка игры: {e}")
     bot.answer_callback_query(c.id)
 
-# Нейросеть (g4f)
+# ======================== НЕЙРОСЕТЬ (g4f) ========================
 @bot.message_handler(func=lambda m: m.text == "🤖 Нейросеть")
 def ai_mode_on(m):
     db_query("UPDATE users SET mode='ai' WHERE id=?", (m.from_user.id,))
@@ -228,17 +223,24 @@ def ai_mode_off(m):
 
 def ai_worker(msg, uid):
     try:
-        import g4f
+        if GPT_MODEL is None:
+            bot.send_message(msg.chat.id, "⚠️ ИИ не установлен (g4f отсутствует)")
+            return
         sys_prompt = "Ты S.P.I.R.A., создана Spirchik. Отвечай по-русски, кратко. О создателе только если спросят."
-        resp = g4f.ChatCompletion.create(model=g4f.models.gpt_35_turbo, messages=[
-            {"role":"system","content":sys_prompt},
-            {"role":"user","content":msg.text}
-        ])
-        bot.send_message(msg.chat.id, resp if resp else "Нет ответа")
+        # Современный вызов g4f
+        response = g4f.ChatCompletion.create(
+            model=GPT_MODEL,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": msg.text}
+            ]
+        )
+        bot.send_message(msg.chat.id, response if response else "Нет ответа")
     except Exception as e:
         logger.error(f"AI error: {e}")
-        bot.send_message(msg.chat.id, f"⚠️ Ошибка ИИ: {e}")
+        bot.send_message(msg.chat.id, f"⚠️ Ошибка ИИ: {str(e)[:100]}")
 
+# ======================== ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (с повторными попытками) ========================
 @bot.message_handler(func=lambda m: m.text == "🎨 Imagine")
 def imagine_prompt(m):
     msg = bot.send_message(m.chat.id, "Опишите картинку:")
@@ -247,16 +249,20 @@ def imagine_prompt(m):
 def generate_image(msg):
     if not msg.text: return
     bot.send_message(msg.chat.id, "🎨 Генерирую изображение...")
-    try:
-        url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(msg.text)}"
-        response = requests.get(url, timeout=30)
-        if response.status_code == 200:
-            bot.send_photo(msg.chat.id, response.content, caption=f"Ваш запрос: {msg.text}")
-        else:
-            bot.send_message(msg.chat.id, "Не удалось сгенерировать картинку")
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"Ошибка: {e}")
+    prompt = msg.text
+    for attempt in range(2):
+        try:
+            url = f"https://image.pollinations.ai/prompt/{requests.utils.quote(prompt)}"
+            response = requests.get(url, timeout=60)
+            if response.status_code == 200:
+                bot.send_photo(msg.chat.id, response.content, caption=f"Ваш запрос: {prompt[:100]}")
+                return
+        except Exception as e:
+            logger.warning(f"Image attempt {attempt+1} failed: {e}")
+            time.sleep(2)
+    bot.send_message(msg.chat.id, "Не удалось сгенерировать картинку. Попробуйте позже.")
 
+# ======================== TTS ========================
 @bot.message_handler(func=lambda m: m.text == "🎤 TTS")
 def tts_btn(m):
     msg = bot.send_message(m.chat.id, "Напишите текст для озвучки:")
@@ -271,9 +277,27 @@ def tts_generate(m):
         audio.seek(0)
         bot.send_voice(m.chat.id, audio)
     except Exception as e:
-        bot.reply_to(m, f"Ошибка: {e}")
+        bot.reply_to(m, f"Ошибка TTS: {e}")
 
-# Остальные кнопки (упрощённо, но работают)
+# ======================== ОСНОВНЫЕ КНОПКИ ========================
+@bot.message_handler(commands=['start'])
+def start_cmd(m):
+    uid = m.from_user.id
+    u = get_u(uid)
+    if not u:
+        ref = None
+        args = m.text.split()
+        if len(args)>1 and args[1].isdigit(): ref = args[1]
+        db_query("INSERT INTO users (id, name, balance, ref_id) VALUES (?,?,?,?)", (uid, m.from_user.first_name, 5000, ref))
+        if ref and int(ref)!=uid:
+            db_query("UPDATE users SET balance = balance + 5000 WHERE id=?", (ref,))
+            try: bot.send_message(ref, "🎁 +5000 🪙 за реферала!")
+            except: pass
+        for qid in [1,2]:
+            db_query("INSERT OR IGNORE INTO user_quests (user_id, quest_id) VALUES (?,?)", (uid, qid))
+    if not check_sub(m): return
+    bot.send_message(m.chat.id, "🦾 S.P.I.R.A. v28.0", reply_markup=main_kb())
+
 @bot.message_handler(func=lambda m: m.text == "💰 Баланс")
 def balance_btn(m):
     u = get_u(m.from_user.id)
@@ -298,9 +322,7 @@ def ref_btn(m):
     username = bot.get_me().username
     if username:
         link = f"https://t.me/{username}?start={m.from_user.id}"
-        bot.send_message(m.chat.id, f"🔗 Ваша реферальная ссылка:\n{link}\nЗа каждого друга +5000 🪙")
-    else:
-        bot.send_message(m.chat.id, "У бота нет username")
+        bot.send_message(m.chat.id, f"🔗 Ваша ссылка:\n{link}\n+5000 🪙 за друга")
 
 @bot.message_handler(func=lambda m: m.text == "🎟 Промокод")
 def promo_btn(m):
@@ -331,10 +353,21 @@ def case_open(m):
     if not u or u['bal'] < 5000:
         return bot.reply_to(m, "Недостаточно монет")
     db_query("UPDATE users SET balance = balance - 5000 WHERE id=?", (uid,))
-    items = ["boost1"]
-    prize = random.choice(items)
-    db_query("INSERT OR IGNORE INTO inventory (user_id, item_id, quantity) VALUES (?,?,1)", (uid, prize))
-    bot.reply_to(m, f"🎁 Вы открыли кейс и получили {prize}!")
+    # Получаем предметы из кейса
+    case_data, _ = db_query("SELECT items FROM cases WHERE id=?", ("case1",), True)
+    items = json.loads(case_data[0][0])
+    r = random.random()
+    cum = 0
+    chosen = None
+    for it in items:
+        cum += it['prob']
+        if r <= cum:
+            chosen = it['item']
+            break
+    if not chosen:
+        chosen = items[0]['item']
+    db_query("INSERT OR IGNORE INTO inventory (user_id, item_id, quantity) VALUES (?,?,1)", (uid, chosen))
+    bot.reply_to(m, f"🎁 Вы открыли кейс и получили {chosen}!")
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Магазин")
 def shop_btn(m):
@@ -365,7 +398,7 @@ def inventory_btn(m):
     uid = m.from_user.id
     inv, _ = db_query("SELECT item_id, quantity FROM inventory WHERE user_id=?", (uid,), True)
     if inv:
-        text = "📦 Ваш инвентарь:\n" + "\n".join([f"{i} x{q}" for i,q in inv])
+        text = "📦 Инвентарь:\n" + "\n".join([f"{i} x{q}" for i,q in inv])
         bot.send_message(m.chat.id, text)
     else:
         bot.send_message(m.chat.id, "Инвентарь пуст")
@@ -396,55 +429,4 @@ def stats_btn(m):
         text = f"📊 Статистика:\nВсего игр: {stats[0][0]}\nПобед: {stats[0][1]}"
         bot.send_message(m.chat.id, text)
     else:
-        bot.send_message(m.chat.id, "Нет статистики")
-
-# Заглушки для остальных функций (чтобы кнопки не падали)
-@bot.message_handler(func=lambda m: m.text in ["🏟 Турнир", "⚔️ Аукцион", "📜 Задания", "🏛 Гильдия"])
-def placeholder(m):
-    bot.send_message(m.chat.id, "Функция в разработке. Скоро появится!")
-
-# Общий обработчик текста (для режима ИИ)
-@bot.message_handler(content_types=['text'])
-def text_handler(m):
-    if not check_sub(m): return
-    uid = m.from_user.id
-    u = get_u(uid)
-    if not u:
-        bot.reply_to(m, "/start")
-        return
-    if u['mode'] == 'ai':
-        threading.Thread(target=ai_worker, args=(m, uid)).start()
-        return
-
-# ==========================================
-# 5. ЗАПУСК (Render)
-# ==========================================
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "S.P.I.R.A. v27.0 is running", 200
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-if __name__ == "__main__":
-    # Запускаем бота в отдельном потоке
-    def run_bot():
-        try:
-            logger.info("Запуск бота...")
-            bot.infinity_polling(timeout=60, skip_pending=True)
-        except Exception as e:
-            logger.error(f"Bot polling error: {e}")
-            time.sleep(5)
-            run_bot()
-
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    logger.info("Бот запущен в потоке")
-
-    # Запускаем Flask в основном потоке
-    port = int(os.environ.get("PORT", 10000))
-    logger.info(f"Запуск Flask на порту {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)
+        bot.send_message(m.chat.id, "Нет стати
