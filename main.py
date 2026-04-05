@@ -13,10 +13,9 @@ import telebot
 from telebot import types
 from gtts import gTTS
 
-# Импортируем g4f правильно (проверяем версию)
+# Импорт g4f с проверкой
 try:
     import g4f
-    # Проверяем, есть ли атрибут models
     if hasattr(g4f, 'models'):
         GPT_MODEL = getattr(g4f.models, 'gpt_35_turbo', None)
         if GPT_MODEL is None:
@@ -31,7 +30,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 TOKEN = "8632196470:AAEwN-tb803AADn5788H-NM8acHibh8oOTU"
-ADMIN_ID = 8632196470
+ADMIN_ID = 6133141754  # Ваш ID
 CHANNEL_ID = "@spiraofficial"
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
@@ -56,7 +55,7 @@ def db_query(query, params=(), fetch=False):
         if conn:
             conn.close()
 
-# Создание всех таблиц (полные)
+# Создание таблиц
 db_query("""CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY, name TEXT, balance INTEGER, mode TEXT, prefix TEXT,
     ref_id INTEGER, level INTEGER DEFAULT 1, exp INTEGER DEFAULT 0,
@@ -113,7 +112,6 @@ def update_stats(uid, game, win, bet=0):
     total_games = (stats[0][1] or 0)+1
     total_wins = (stats[0][2] or 0)+(1 if win else 0)
     db_query(f"UPDATE stats SET total_games=?, total_wins=?, game_{game}_wins = game_{game}_wins + ? WHERE user_id=?", (total_games, total_wins, 1 if win else 0, uid))
-    # Квесты
     if win:
         db_query("UPDATE user_quests SET progress = progress + 1 WHERE user_id=? AND quest_id IN (SELECT id FROM quests WHERE goal_type='win_games') AND completed=0", (uid,))
     db_query("UPDATE user_quests SET progress = progress + 1 WHERE user_id=? AND quest_id IN (SELECT id FROM quests WHERE goal_type='play_games') AND completed=0", (uid,))
@@ -227,7 +225,6 @@ def ai_worker(msg, uid):
             bot.send_message(msg.chat.id, "⚠️ ИИ не установлен (g4f отсутствует)")
             return
         sys_prompt = "Ты S.P.I.R.A., создана Spirchik. Отвечай по-русски, кратко. О создателе только если спросят."
-        # Современный вызов g4f
         response = g4f.ChatCompletion.create(
             model=GPT_MODEL,
             messages=[
@@ -240,7 +237,7 @@ def ai_worker(msg, uid):
         logger.error(f"AI error: {e}")
         bot.send_message(msg.chat.id, f"⚠️ Ошибка ИИ: {str(e)[:100]}")
 
-# ======================== ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ (с повторными попытками) ========================
+# ======================== ГЕНЕРАЦИЯ ИЗОБРАЖЕНИЙ ========================
 @bot.message_handler(func=lambda m: m.text == "🎨 Imagine")
 def imagine_prompt(m):
     msg = bot.send_message(m.chat.id, "Опишите картинку:")
@@ -316,6 +313,8 @@ def top_btn(m):
     if data:
         msg = "🏆 ТОП-10 богачей:\n" + "\n".join([f"{i+1}. {row[0]}: {row[1]} 🪙" for i,row in enumerate(data)])
         bot.send_message(m.chat.id, msg)
+    else:
+        bot.send_message(m.chat.id, "Нет данных")
 
 @bot.message_handler(func=lambda m: m.text == "👥 Рефералы")
 def ref_btn(m):
@@ -323,6 +322,8 @@ def ref_btn(m):
     if username:
         link = f"https://t.me/{username}?start={m.from_user.id}"
         bot.send_message(m.chat.id, f"🔗 Ваша ссылка:\n{link}\n+5000 🪙 за друга")
+    else:
+        bot.send_message(m.chat.id, "У бота нет username")
 
 @bot.message_handler(func=lambda m: m.text == "🎟 Промокод")
 def promo_btn(m):
@@ -353,7 +354,6 @@ def case_open(m):
     if not u or u['bal'] < 5000:
         return bot.reply_to(m, "Недостаточно монет")
     db_query("UPDATE users SET balance = balance - 5000 WHERE id=?", (uid,))
-    # Получаем предметы из кейса
     case_data, _ = db_query("SELECT items FROM cases WHERE id=?", ("case1",), True)
     items = json.loads(case_data[0][0])
     r = random.random()
@@ -429,4 +429,261 @@ def stats_btn(m):
         text = f"📊 Статистика:\nВсего игр: {stats[0][0]}\nПобед: {stats[0][1]}"
         bot.send_message(m.chat.id, text)
     else:
-        bot.send_message(m.chat.id, "Нет стати
+        bot.send_message(m.chat.id, "Нет статистики")
+
+# ======================== ТУРНИРЫ ========================
+@bot.message_handler(func=lambda m: m.text == "🏟 Турнир")
+def tournament_menu(m):
+    bot.send_message(m.chat.id, "🏆 Турнир каждые 6 часов. Участие: /tournament_join")
+
+@bot.message_handler(commands=['tournament_join'])
+def tournament_join(m):
+    uid = m.from_user.id
+    now = datetime.now().isoformat()
+    tour, _ = db_query("SELECT id, participants FROM tournaments WHERE status='active' AND end_time > ?", (now,), True)
+    if not tour:
+        start = datetime.now()
+        end = start + timedelta(hours=6)
+        prize = 10000
+        db_query("INSERT INTO tournaments (start_time, end_time, prize_pool, participants, status) VALUES (?,?,?,?,'active')",
+                 (start.isoformat(), end.isoformat(), prize, json.dumps([])))
+        tour, _ = db_query("SELECT id, participants FROM tournaments WHERE status='active'", fetch=True)
+    tid, parts_json = tour[0]
+    participants = json.loads(parts_json) if parts_json else []
+    if uid in participants:
+        return bot.reply_to(m, "Вы уже участвуете")
+    participants.append(uid)
+    db_query("UPDATE tournaments SET participants = ? WHERE id=?", (json.dumps(participants), tid))
+    bot.reply_to(m, "✅ Вы записаны на турнир!")
+
+def tournament_worker():
+    while True:
+        time.sleep(60)
+        now = datetime.now()
+        finished, _ = db_query("SELECT id, prize_pool, participants FROM tournaments WHERE status='active' AND end_time < ?", (now.isoformat(),), True)
+        for tid, prize, parts_json in finished:
+            participants = json.loads(parts_json) if parts_json else []
+            if participants:
+                winner = random.choice(participants)
+                db_query("UPDATE users SET balance = balance + ? WHERE id=?", (prize, winner))
+                try: bot.send_message(winner, f"🏆 Вы выиграли турнир! +{prize} 🪙")
+                except: pass
+                db_query("UPDATE tournaments SET status='finished', winner_id=? WHERE id=?", (winner, tid))
+            else:
+                db_query("UPDATE tournaments SET status='finished' WHERE id=?", (tid,))
+        active, _ = db_query("SELECT id FROM tournaments WHERE status='active'", fetch=True)
+        if not active:
+            start = now
+            end = start + timedelta(hours=6)
+            prize = 10000
+            db_query("INSERT INTO tournaments (start_time, end_time, prize_pool, participants, status) VALUES (?,?,?,?,'active')",
+                     (start.isoformat(), end.isoformat(), prize, json.dumps([])))
+
+# ======================== АУКЦИОН ========================
+@bot.message_handler(func=lambda m: m.text == "⚔️ Аукцион")
+def auction_menu(m):
+    bot.send_message(m.chat.id, "Аукцион:\n/auction list - список лотов\n/auction sell [item] [min_bid] - выставить\n/auction bid [lot_id] [sum] - сделать ставку")
+
+@bot.message_handler(commands=['auction'])
+def auction_cmd(m):
+    args = m.text.split()
+    if len(args)<2:
+        bot.reply_to(m, "Используйте: /auction list|sell|bid")
+        return
+    action = args[1].lower()
+    uid = m.from_user.id
+    if action == "list":
+        lots, _ = db_query("SELECT id, seller_id, item_id, current_bid, end_time FROM auctions WHERE status='active'", fetch=True)
+        if not lots:
+            bot.reply_to(m, "Нет активных лотов")
+            return
+        text = "🏷 Активные лоты:\n"
+        for l in lots:
+            text += f"ID {l[0]}: {l[2]} | Ставка: {l[3]} | До {l[4][:16]}\n"
+        bot.send_message(m.chat.id, text)
+    elif action == "sell":
+        if len(args)<4: return
+        item_id = args[2]
+        min_bid = int(args[3])
+        inv, _ = db_query("SELECT quantity FROM inventory WHERE user_id=? AND item_id=?", (uid, item_id), True)
+        if not inv or inv[0][0]<1:
+            bot.reply_to(m, "У вас нет такого предмета")
+            return
+        end = (datetime.now()+timedelta(hours=24)).isoformat()
+        db_query("INSERT INTO auctions (seller_id, item_id, min_bid, current_bid, end_time) VALUES (?,?,?,?,?)",
+                 (uid, item_id, min_bid, min_bid, end))
+        bot.reply_to(m, f"Лот {item_id} выставлен на 24 часа")
+    elif action == "bid":
+        if len(args)<4: return
+        lot_id = int(args[2])
+        bid = int(args[3])
+        lot, _ = db_query("SELECT seller_id, current_bid FROM auctions WHERE id=? AND status='active'", (lot_id,), True)
+        if not lot:
+            bot.reply_to(m, "Лот не найден")
+            return
+        seller, curr = lot[0]
+        if uid == seller:
+            bot.reply_to(m, "Нельзя торговаться за свой лот")
+            return
+        if bid <= curr:
+            bot.reply_to(m, f"Ставка должна быть больше {curr}")
+            return
+        u = get_u(uid)
+        if u['bal'] < bid:
+            bot.reply_to(m, "Недостаточно монет")
+            return
+        db_query("UPDATE auctions SET current_bid=?, current_bidder=? WHERE id=?", (bid, uid, lot_id))
+        bot.reply_to(m, f"Ставка {bid} принята!")
+
+def auction_worker():
+    while True:
+        time.sleep(60)
+        now = datetime.now().isoformat()
+        ended, _ = db_query("SELECT id, seller_id, current_bidder, current_bid, item_id FROM auctions WHERE status='active' AND end_time < ?", (now,), True)
+        for aid, seller, buyer, price, item in ended:
+            if buyer:
+                db_query("DELETE FROM inventory WHERE user_id=? AND item_id=?", (seller, item))
+                db_query("INSERT OR IGNORE INTO inventory (user_id, item_id, quantity) VALUES (?,?,1)", (buyer, item))
+                db_query("UPDATE users SET balance = balance + ? WHERE id=?", (price, seller))
+                db_query("UPDATE users SET balance = balance - ? WHERE id=?", (price, buyer))
+                try:
+                    bot.send_message(seller, f"💰 Ваш лот {item} продан за {price} 🪙")
+                    bot.send_message(buyer, f"🎉 Вы выиграли лот {item} за {price} 🪙")
+                except: pass
+            db_query("UPDATE auctions SET status='finished' WHERE id=?", (aid,))
+
+# ======================== ЗАДАНИЯ ========================
+@bot.message_handler(func=lambda m: m.text == "📜 Задания")
+def quests_btn(m):
+    uid = m.from_user.id
+    quests, _ = db_query("SELECT id, name_ru, goal_count FROM quests", fetch=True)
+    user_q, _ = db_query("SELECT quest_id, progress, completed FROM user_quests WHERE user_id=?", (uid,), True)
+    prog = {q[0]:(q[1],q[2]) for q in user_q}
+    text = "📜 Ваши задания:\n"
+    for qid, name, goal in quests:
+        p, done = prog.get(qid, (0,0))
+        status = "✅" if done else f"{p}/{goal}"
+        text += f"{status} {name}\n"
+    bot.send_message(m.chat.id, text)
+
+# ======================== ГИЛЬДИИ ========================
+@bot.message_handler(func=lambda m: m.text == "🏛 Гильдия")
+def guild_menu(m):
+    bot.send_message(m.chat.id, "Гильдии:\n/guild create [название]\n/guild join [id]\n/guild info [id]\n/guild leave")
+
+@bot.message_handler(commands=['guild'])
+def guild_cmd(m):
+    args = m.text.split()
+    if len(args)<2:
+        bot.reply_to(m, "Используйте: /guild create|join|info|leave")
+        return
+    action = args[1].lower()
+    uid = m.from_user.id
+    if action == "create":
+        if len(args)<3: return
+        name = " ".join(args[2:])
+        db_query("INSERT INTO guilds (name, leader_id, created) VALUES (?,?,?)", (name, uid, datetime.now().isoformat()))
+        gid = db_query("SELECT last_insert_rowid()", fetch=True)[0][0]
+        db_query("INSERT INTO guild_members VALUES (?,?,?)", (uid, gid, "leader"))
+        bot.reply_to(m, f"Гильдия {name} создана! ID: {gid}")
+    elif action == "join":
+        if len(args)<3: return
+        gid = int(args[2])
+        mem, _ = db_query("SELECT user_id FROM guild_members WHERE user_id=? AND guild_id=?", (uid, gid), True)
+        if mem:
+            bot.reply_to(m, "Вы уже в гильдии")
+            return
+        db_query("INSERT INTO guild_members VALUES (?,?,?)", (uid, gid, "member"))
+        bot.reply_to(m, f"Вы вступили в гильдию {gid}")
+    elif action == "info":
+        if len(args)<3: return
+        gid = int(args[2])
+        guild, _ = db_query("SELECT name, leader_id, balance, level FROM guilds WHERE id=?", (gid,), True)
+        if not guild: return
+        name, lid, bal, lvl = guild[0]
+        cnt, _ = db_query("SELECT COUNT(*) FROM guild_members WHERE guild_id=?", (gid,), True)
+        bot.send_message(m.chat.id, f"🏛 {name}\nЛидер: {lid}\nУровень: {lvl}\nКазна: {bal}\nУчастников: {cnt[0][0]}")
+    elif action == "leave":
+        db_query("DELETE FROM guild_members WHERE user_id=? AND guild_id IN (SELECT id FROM guilds WHERE leader_id!=?)", (uid, uid))
+        bot.reply_to(m, "Вы покинули гильдию")
+
+# ======================== ОБЩИЙ ОБРАБОТЧИК ТЕКСТА ========================
+@bot.message_handler(content_types=['text'])
+def text_handler(m):
+    if not check_sub(m): return
+    uid = m.from_user.id
+    u = get_u(uid)
+    if not u:
+        bot.reply_to(m, "/start")
+        return
+    if u['mode'] == 'ai':
+        threading.Thread(target=ai_worker, args=(m, uid)).start()
+        return
+
+# ======================== АДМИН-ПАНЕЛЬ ========================
+@bot.message_handler(commands=['admin'])
+def admin_panel(m):
+    if m.from_user.id != ADMIN_ID: return
+    bot.send_message(m.chat.id, "👑 Админ-панель:\n/broadcast [текст]\n/give [id] [сумма]\n/createpromo [код] [награда] [лимит]\n/ban [id]")
+
+@bot.message_handler(commands=['broadcast'])
+def broadcast(m):
+    if m.from_user.id != ADMIN_ID: return
+    text = m.text.replace("/broadcast ", "")
+    if not text: return
+    users, _ = db_query("SELECT id FROM users", fetch=True)
+    for uid in users:
+        try: bot.send_message(uid[0], f"📢 {text}")
+        except: pass
+    bot.reply_to(m, f"Отправлено {len(users)}")
+
+@bot.message_handler(commands=['give'])
+def give(m):
+    if m.from_user.id != ADMIN_ID: return
+    args = m.text.split()
+    if len(args)<3: return
+    uid, amt = int(args[1]), int(args[2])
+    db_query("UPDATE users SET balance = balance + ? WHERE id=?", (amt, uid))
+    bot.reply_to(m, f"✅ +{amt} {uid}")
+    try: bot.send_message(uid, f"🎁 Админ выдал {amt} 🪙")
+    except: pass
+
+@bot.message_handler(commands=['createpromo'])
+def createpromo(m):
+    if m.from_user.id != ADMIN_ID: return
+    args = m.text.split()
+    if len(args)<4: return
+    code, reward, limit = args[1].upper(), int(args[2]), int(args[3])
+    db_query("INSERT OR IGNORE INTO promo VALUES (?,?,?,0)", (code, reward, limit))
+    bot.reply_to(m, f"Промокод {code} создан")
+
+@bot.message_handler(commands=['ban'])
+def ban(m):
+    if m.from_user.id != ADMIN_ID: return
+    args = m.text.split()
+    if len(args)<2: return
+    uid = int(args[1])
+    db_query("DELETE FROM users WHERE id=?", (uid,))
+    bot.reply_to(m, f"Пользователь {uid} забанен")
+
+# ======================== ЗАПУСК ========================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "S.P.I.R.A. v28.0 работает", 200
+
+if __name__ == "__main__":
+    threading.Thread(target=tournament_worker, daemon=True).start()
+    threading.Thread(target=auction_worker, daemon=True).start()
+    def run_bot():
+        while True:
+            try:
+                logger.info("Запуск бота...")
+                bot.infinity_polling(timeout=60, skip_pending=True)
+            except Exception as e:
+                logger.error(f"Bot polling error: {e}")
+                time.sleep(5)
+    threading.Thread(target=run_bot, daemon=True).start()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
