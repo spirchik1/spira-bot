@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 TOKEN = "8632196470:AAEwN-tb803AADn5788H-NM8acHibh8oOTU"
-ADMIN_ID = 6133141754
+OWNER_ID = 6133141754  # Владелец бота (вы)
 CHANNEL_ID = "@spiraofficial"
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
@@ -26,7 +26,7 @@ bot = telebot.TeleBot(TOKEN, threaded=True)
 def db_query(query, params=(), fetch=False):
     conn = None
     try:
-        conn = sqlite3.connect('spira_full.db', timeout=30, check_same_thread=False)
+        conn = sqlite3.connect('spira_final.db', timeout=30, check_same_thread=False)
         cur = conn.cursor()
         cur.execute(query, params)
         if fetch:
@@ -42,7 +42,7 @@ def db_query(query, params=(), fetch=False):
         if conn:
             conn.close()
 
-# Создание таблиц
+# Таблицы (добавлена таблица admin_users)
 db_query("""CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     name TEXT,
@@ -56,7 +56,10 @@ db_query("""CREATE TABLE IF NOT EXISTS users (
     daily_streak INTEGER DEFAULT 0,
     lang TEXT DEFAULT 'ru'
 )""")
-
+db_query("""CREATE TABLE IF NOT EXISTS admin_users (
+    user_id INTEGER PRIMARY KEY,
+    added_by INTEGER
+)""")
 db_query("""CREATE TABLE IF NOT EXISTS stats (
     user_id INTEGER PRIMARY KEY,
     total_games INTEGER DEFAULT 0,
@@ -66,9 +69,9 @@ db_query("""CREATE TABLE IF NOT EXISTS stats (
     game_slots_wins INTEGER DEFAULT 0,
     game_casino_wins INTEGER DEFAULT 0,
     game_tic_tac_toe_wins INTEGER DEFAULT 0,
-    game_mines_wins INTEGER DEFAULT 0
+    game_mines_wins INTEGER DEFAULT 0,
+    game_basketball_wins INTEGER DEFAULT 0
 )""")
-
 db_query("CREATE TABLE IF NOT EXISTS inventory (user_id INTEGER, item_id TEXT, quantity INTEGER DEFAULT 1, PRIMARY KEY (user_id, item_id))")
 db_query("CREATE TABLE IF NOT EXISTS shop_items (id TEXT PRIMARY KEY, name_ru TEXT, price INTEGER, type TEXT, effect TEXT)")
 db_query("CREATE TABLE IF NOT EXISTS cases (id TEXT PRIMARY KEY, name_ru TEXT, price INTEGER, items TEXT)")
@@ -83,7 +86,7 @@ db_query("CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)")
 db_query("CREATE TABLE IF NOT EXISTS ttt_games (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, player1 INTEGER, player2 INTEGER, board TEXT, turn INTEGER, status TEXT, bet INTEGER, winner_id INTEGER)")
 db_query("CREATE TABLE IF NOT EXISTS mines_games (user_id INTEGER, state TEXT)")
 
-# ======================== НАЧАЛЬНОЕ ЗАПОЛНЕНИЕ ========================
+# Наполнение начальными данными (магазин, кейсы, задания, промокод)
 prefixes = [
     ('prefix_newbie', 'Новичок 🛡', 0, 'role'),
     ('prefix_winner', 'Победитель 🏅', 5000, 'role'),
@@ -110,12 +113,10 @@ for p in prefixes:
 db_query("INSERT OR IGNORE INTO shop_items VALUES ('boost1','Буст +20%',5000,'boost','win_chance+20')")
 db_query("INSERT OR IGNORE INTO shop_items VALUES ('skin_gold','Золотой кубик',10000,'skin','dice_emoji=🎲✨')")
 
-# Кейсы
 db_query("INSERT OR IGNORE INTO cases VALUES ('case1','Обычный кейс',5000,'[{\"item\":\"prefix_winner\",\"prob\":0.3},{\"item\":\"boost1\",\"prob\":0.7}]')")
 db_query("INSERT OR IGNORE INTO cases VALUES ('case2','Редкий кейс',15000,'[{\"item\":\"prefix_legend\",\"prob\":0.2},{\"item\":\"prefix_king\",\"prob\":0.3},{\"item\":\"skin_gold\",\"prob\":0.5}]')")
 db_query("INSERT OR IGNORE INTO cases VALUES ('case3','Легендарный кейс',50000,'[{\"item\":\"prefix_god\",\"prob\":0.1},{\"item\":\"prefix_dragon\",\"prob\":0.2},{\"item\":\"prefix_immortal\",\"prob\":0.7}]')")
 
-# Задания
 quests_data = [
     (1, 'Сыграй 5 игр', 'play_games', 5, 1000, 50, ''),
     (2, 'Выиграй 3 игры', 'win_games', 3, 2000, 100, 'prefix_winner'),
@@ -129,8 +130,19 @@ for q in quests_data:
     db_query("INSERT OR IGNORE INTO quests VALUES (?,?,?,?,?,?,?)", q)
 
 db_query("INSERT OR IGNORE INTO promo VALUES ('MEGA2024', 10000, 50, 0)")
+db_query("INSERT OR IGNORE INTO promo VALUES ('TEST500', 500, 100, 0)")
+
+# Добавляем владельца в админы (если ещё нет)
+db_query("INSERT OR IGNORE INTO admin_users VALUES (?,?)", (OWNER_ID, OWNER_ID))
 
 logger.info("База данных инициализирована")# ======================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ========================
+def is_admin(user_id):
+    """Проверяет, является ли пользователь админом (владелец или добавленный)"""
+    if user_id == OWNER_ID:
+        return True
+    res, _ = db_query("SELECT user_id FROM admin_users WHERE user_id=?", (user_id,), True)
+    return bool(res)
+
 def get_user(uid):
     res, _ = db_query("SELECT balance, mode, prefix, level, exp, lang FROM users WHERE id=?", (uid,), True)
     if res:
@@ -146,9 +158,7 @@ def get_user(uid):
 
 def get_user_prefix(uid):
     user = get_user(uid)
-    if user:
-        return user['prefix']
-    return "Новичок 🛡"
+    return user['prefix'] if user else "Новичок 🛡"
 
 def is_group_admin(chat_id, user_id):
     try:
@@ -172,7 +182,7 @@ def update_stats(uid, game, win, bet=0):
     stats, _ = db_query("SELECT * FROM stats WHERE user_id=?", (uid,), True)
     if not stats:
         db_query("INSERT INTO stats (user_id) VALUES (?)", (uid,))
-        stats = [(0, 0, 0, 0, 0, 0, 0, 0)]
+        stats = [(0, 0, 0, 0, 0, 0, 0, 0, 0)]
 
     total_games = (stats[0][1] or 0) + 1
     total_wins = (stats[0][2] or 0) + (1 if win else 0)
@@ -182,12 +192,12 @@ def update_stats(uid, game, win, bet=0):
         'slots': 'game_slots_wins',
         'casino': 'game_casino_wins',
         'ttt': 'game_tic_tac_toe_wins',
-        'mines': 'game_mines_wins'
+        'mines': 'game_mines_wins',
+        'basketball': 'game_basketball_wins'
     }
     col = game_cols.get(game, 'game_dice_wins')
     db_query(f"UPDATE stats SET total_games=?, total_wins=?, {col} = {col} + ? WHERE user_id=?", (total_games, total_wins, 1 if win else 0, uid))
 
-    # Квесты
     if win:
         db_query("UPDATE user_quests SET progress = progress + 1 WHERE user_id=? AND quest_id IN (SELECT id FROM quests WHERE goal_type='win_games') AND completed=0", (uid,))
     db_query("UPDATE user_quests SET progress = progress + 1 WHERE user_id=? AND quest_id IN (SELECT id FROM quests WHERE goal_type='play_games') AND completed=0", (uid,))
@@ -229,10 +239,10 @@ def main_keyboard():
     markup.add("👥 Рефералы", "🏆 ТОП", "🎟 Промокод", "📦 Кейсы", "🛒 Магазин")
     markup.add("⚙️ Бонус", "🎲 Статистика", "🏅 Инвентарь", "🎤 TTS", "🎨 Imagine")
     markup.add("🏟 Турнир", "⚔️ Аукцион", "📜 Задания", "🏛 Гильдия", "➕ Добавить бота в чат")
-    return markup# ======================== ИГРЫ (ОСНОВНЫЕ) ========================
+    return markup# ======================== ИГРЫ (inline меню) ========================
 @bot.message_handler(func=lambda m: m.text == "🎮 Игры")
 def games_menu(message):
-    games = ["dice", "coin", "slots", "casino", "ttt", "mines"]
+    games = ["dice", "coin", "slots", "casino", "basketball", "ttt", "mines"]
     markup = types.InlineKeyboardMarkup(row_width=2)
     for g in games:
         markup.add(types.InlineKeyboardButton(g.capitalize(), callback_data=f"game_{g}"))
@@ -291,6 +301,10 @@ def simple_bet_callback(call):
                 win, coeff = True, 10.0
             elif val in (16, 32, 48):
                 win, coeff = True, 3.0
+        elif game == "basketball":
+            val = bot.send_dice(call.message.chat.id, "🏀").dice.value
+            if val >= 4:
+                win = True
         if win:
             prize = int(bet * coeff)
             db_query("UPDATE users SET balance = balance + ? WHERE id=?", (prize, uid))
@@ -310,8 +324,8 @@ def ttt_bet_callback(call):
     if not user or user['bal'] < bet:
         bot.answer_callback_query(call.id, "Недостаточно монет")
         return
-    bot.send_message(call.message.chat.id, "Введите Telegram ID или username противника, или 'бот' для игры с ботом.")
-    bot.register_next_step_handler(call.message, lambda m: ttt_opponent(m, bet, uid))
+    msg = bot.send_message(call.message.chat.id, "Введите Telegram ID или username противника, или 'бот' для игры с ботом.")
+    bot.register_next_step_handler(msg, lambda m: ttt_opponent(m, bet, uid))
 
 def ttt_opponent(message, bet, uid):
     text = message.text.strip()
@@ -339,8 +353,8 @@ def ttt_opponent(message, bet, uid):
         start_ttt_game(message.chat.id, uid, opponent, bet)
 
 def start_ttt_game(chat_id, player1, player2, bet):
-    board = [" "] * 9
-    turn = 1
+    board = [" " for _ in range(9)]
+    turn = 1  # 1 = X (игрок1), 2 = O (игрок2 или бот)
     status = "active"
     db_query("INSERT INTO ttt_games (chat_id, player1, player2, board, turn, status, bet) VALUES (?,?,?,?,?,?,?)",
              (chat_id, player1, player2, json.dumps(board), turn, status, bet))
@@ -350,18 +364,22 @@ def start_ttt_game(chat_id, player1, player2, bet):
 def send_ttt_board(chat_id, game_id, p1, p2, board, turn, bet):
     text = f"🎮 Крестики-нолики | Ставка: {bet} 🪙\n"
     if p2:
-        text += f"Игрок X: {p1}\nИгрок O: {p2}\n"
+        text += f"X: {p1}  |  O: {p2}\n"
     else:
-        text += f"Игрок X: {p1}\nИгрок O: Бот\n"
-    text += f"Ход: {'X' if turn==1 else 'O'}\n\n"
-    for i in range(0, 9, 3):
-        row = board[i:i+3]
-        text += " | ".join([c if c != " " else str(i+1) for c in row]) + "\n" + ("---------\n" if i < 6 else "")
+        text += f"X: {p1}  |  O: Бот\n"
+    text += f"Ход: {'❌' if turn == 1 else '⭕'}\n\n"
     markup = types.InlineKeyboardMarkup(row_width=3)
     for i in range(9):
-        if board[i] == " ":
-            markup.add(types.InlineKeyboardButton(str(i+1), callback_data=f"ttt_move_{game_id}_{i}"))
-    bot.send_message(chat_id, text, reply_markup=markup)
+        symbol = board[i]
+        if symbol == " ":
+            button_text = "⬜"
+        elif symbol == "X":
+            button_text = "❌"
+        else:
+            button_text = "⭕"
+        callback = f"ttt_move_{game_id}_{i}"
+        markup.add(types.InlineKeyboardButton(button_text, callback_data=callback))
+    bot.edit_message_text(text, chat_id, message_id=None, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ttt_move_"))
 def ttt_move_callback(call):
@@ -375,18 +393,22 @@ def ttt_move_callback(call):
         return
     p1, p2, board_json, turn, status, bet = game[0]
     if status != "active":
-        bot.answer_callback_query(call.id, "Игра завершена")
+        bot.answer_callback_query(call.id, "Игра уже завершена")
         return
     board = json.loads(board_json)
-    if (turn == 1 and uid != p1) or (turn == 2 and p2 and uid != p2):
+    if turn == 1 and uid != p1:
+        bot.answer_callback_query(call.id, "Сейчас не ваш ход")
+        return
+    if turn == 2 and p2 and uid != p2:
         bot.answer_callback_query(call.id, "Сейчас не ваш ход")
         return
     if p2 is None and turn == 2:
         bot.answer_callback_query(call.id, "Сейчас ходит бот")
         return
     if board[pos] != " ":
-        bot.answer_callback_query(call.id, "Клетка занята")
+        bot.answer_callback_query(call.id, "Клетка уже занята")
         return
+    # Ход игрока
     board[pos] = "X" if turn == 1 else "O"
     winner = check_ttt_winner(board)
     if winner:
@@ -394,16 +416,17 @@ def ttt_move_callback(call):
         if winner_id:
             prize = int(bet * 1.8)
             db_query("UPDATE users SET balance = balance + ? WHERE id=?", (prize, winner_id))
-            bot.send_message(call.message.chat.id, f"🏆 Игрок {winner_id} выиграл {prize} 🪙!")
+            bot.edit_message_text(f"🏆 Игрок {winner_id} выиграл {prize} 🪙!", call.message.chat.id, call.message.message_id)
             update_stats(winner_id, "ttt", True, bet)
             if p2 and p2 != winner_id:
                 update_stats(p2, "ttt", False, bet)
             else:
                 update_stats(p1, "ttt", False, bet)
         else:
+            # победа бота
             prize = int(bet * 1.8)
             db_query("UPDATE users SET balance = balance + ? WHERE id=?", (prize, p1))
-            bot.send_message(call.message.chat.id, f"🤖 Бот выиграл! Вы потеряли {bet} 🪙.")
+            bot.edit_message_text(f"🤖 Бот выиграл! Вы потеряли {bet} 🪙.", call.message.chat.id, call.message.message_id)
             update_stats(p1, "ttt", False, bet)
         db_query("UPDATE ttt_games SET status='finished', winner_id=? WHERE id=?", (winner_id, game_id))
         return
@@ -411,17 +434,20 @@ def ttt_move_callback(call):
         db_query("UPDATE users SET balance = balance + ? WHERE id=?", (bet, p1))
         if p2:
             db_query("UPDATE users SET balance = balance + ? WHERE id=?", (bet, p2))
-            bot.send_message(call.message.chat.id, "🤝 Ничья! Ставки возвращены.")
+            bot.edit_message_text("🤝 Ничья! Ставки возвращены.", call.message.chat.id, call.message.message_id)
         else:
-            bot.send_message(call.message.chat.id, "🤝 Ничья с ботом! Ставка возвращена.")
+            bot.edit_message_text("🤝 Ничья с ботом! Ставка возвращена.", call.message.chat.id, call.message.message_id)
         db_query("UPDATE ttt_games SET status='finished' WHERE id=?", (game_id,))
         return
     new_turn = 2 if turn == 1 else 1
     db_query("UPDATE ttt_games SET board=?, turn=? WHERE id=?", (json.dumps(board), new_turn, game_id))
     if p2 is None and new_turn == 2:
+        # Ход бота
+        bot.answer_callback_query(call.id, "Бот ходит...")
         bot_move(game_id)
     else:
         send_ttt_board(call.message.chat.id, game_id, p1, p2, board, new_turn, bet)
+    bot.answer_callback_query(call.id)
 
 def check_ttt_winner(board):
     lines = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
@@ -431,10 +457,10 @@ def check_ttt_winner(board):
     return None
 
 def bot_move(game_id):
-    game = db_query("SELECT player1, board, turn, bet FROM ttt_games WHERE id=?", (game_id,), True)
+    game = db_query("SELECT player1, board, turn, bet, chat_id, message_id FROM ttt_games WHERE id=?", (game_id,), True)
     if not game:
         return
-    p1, board_json, turn, bet = game[0]
+    p1, board_json, turn, bet, chat_id, msg_id = game[0]
     if turn != 2:
         return
     board = json.loads(board_json)
@@ -456,9 +482,7 @@ def bot_move(game_id):
         db_query("UPDATE ttt_games SET status='finished' WHERE id=?", (game_id,))
         return
     db_query("UPDATE ttt_games SET board=?, turn=1 WHERE id=?", (json.dumps(board), game_id))
-    send_ttt_board(p1, game_id, p1, None, board, 1, bet)
-
-# -------------------- Игра "Мины" --------------------
+    send_ttt_board(chat_id, game_id, p1, None, board, 1, bet)# -------------------- Игра "Мины" --------------------
 @bot.callback_query_handler(func=lambda call: call.data.startswith("mines_mines_"))
 def mines_mines_callback(call):
     mines = int(call.data.split("_")[2])
@@ -492,14 +516,16 @@ def mines_bet_callback(call):
     db_query("DELETE FROM mines_games WHERE user_id=?", (uid,))
     db_query("INSERT INTO mines_games VALUES (?,?)", (uid, json.dumps(game_state)))
     send_mines_board(call.message.chat.id, uid, game_state)
+    bot.answer_callback_query(call.id)
 
 def send_mines_board(chat_id, uid, game_state):
     board = game_state["board"]
-    text = f"💣 Игра Мины | Ставка: {game_state['bet']} 🪙 | Множитель: {game_state['multiplier']:.2f}x\n"
+    text = f"💣 Игра Мины | Ставка: {game_state['bet']} 🪙 | Множитель: {game_state['multiplier']:.2f}x\n\n"
+    # Отображаем сетку 5x5
     markup = types.InlineKeyboardMarkup(row_width=5)
     for i in range(25):
         if board[i] == "?":
-            markup.add(types.InlineKeyboardButton("?", callback_data=f"mines_open_{i}"))
+            markup.add(types.InlineKeyboardButton("❓", callback_data=f"mines_open_{i}"))
         elif board[i] == "💣":
             markup.add(types.InlineKeyboardButton("💣", callback_data="mines_no"))
         elif board[i] == "💰":
@@ -507,7 +533,7 @@ def send_mines_board(chat_id, uid, game_state):
         else:
             markup.add(types.InlineKeyboardButton(" ", callback_data="mines_no"))
     markup.add(types.InlineKeyboardButton("💰 Забрать выигрыш", callback_data="mines_cashout"))
-    bot.send_message(chat_id, text, reply_markup=markup)
+    bot.edit_message_text(text, chat_id, message_id=None, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("mines_open_"))
 def mines_open_callback(call):
@@ -526,7 +552,7 @@ def mines_open_callback(call):
         return
     if pos in game_state["bombs"]:
         game_state["board"][pos] = "💣"
-        bot.send_message(call.message.chat.id, f"💥 Вы наступили на мину! Проигрыш {game_state['bet']} 🪙")
+        bot.edit_message_text(f"💥 Вы наступили на мину! Проигрыш {game_state['bet']} 🪙", call.message.chat.id, call.message.message_id)
         db_query("DELETE FROM mines_games WHERE user_id=?", (uid,))
         update_stats(uid, "mines", False, game_state['bet'])
         bot.answer_callback_query(call.id, "Проигрыш")
@@ -553,7 +579,7 @@ def mines_cashout_callback(call):
         return
     prize = int(game_state["bet"] * game_state["multiplier"])
     db_query("UPDATE users SET balance = balance + ? WHERE id=?", (prize, uid))
-    bot.send_message(call.message.chat.id, f"💰 Вы забрали выигрыш: {prize} 🪙 (Множитель {game_state['multiplier']:.2f})")
+    bot.edit_message_text(f"💰 Вы забрали выигрыш: {prize} 🪙 (Множитель {game_state['multiplier']:.2f})", call.message.chat.id, call.message.message_id)
     update_stats(uid, "mines", True, game_state['bet'])
     db_query("DELETE FROM mines_games WHERE user_id=?", (uid,))
     bot.answer_callback_query(call.id, "Выигрыш получен")# ======================== ОСНОВНЫЕ КОМАНДЫ ========================
@@ -579,7 +605,7 @@ def start_command(message):
     if message.chat.type == 'private':
         if not check_subscription(message):
             return
-        bot.send_message(message.chat.id, "🦾 S.P.I.R.A. v30.0", reply_markup=main_keyboard())
+        bot.send_message(message.chat.id, "🦾 S.P.I.R.A. v31.0", reply_markup=main_keyboard())
     else:
         bot.send_message(message.chat.id, "🦾 Бот активен!")
 
@@ -644,7 +670,8 @@ def set_prefix_callback(call):
 
 @bot.message_handler(func=lambda m: m.text == "🏆 ТОП")
 def top_button(message):
-    data, _ = db_query("SELECT name, balance FROM users ORDER BY balance DESC LIMIT 10", fetch=True)
+    # Исключаем владельца из топа
+    data, _ = db_query("SELECT name, balance FROM users WHERE id != ? ORDER BY balance DESC LIMIT 10", (OWNER_ID,), fetch=True)
     if data:
         text = "🏆 ТОП-10 богачей:\n" + "\n".join([f"{i+1}. {row[0]}: {row[1]} 🪙" for i, row in enumerate(data)])
         bot.send_message(message.chat.id, text)
@@ -667,18 +694,23 @@ def promo_button(message):
 
 def apply_promo(message):
     uid = message.from_user.id
-    code = message.text.upper()
+    code = message.text.strip().upper()
+    # Проверяем, использовал ли уже
     if db_query("SELECT * FROM used_promos WHERE user_id=? AND code=?", (uid, code), True)[0]:
         bot.reply_to(message, "❌ Вы уже использовали этот промокод.")
         return
     promo = db_query("SELECT reward, limit_uses, used_count FROM promo WHERE code=?", (code,), True)
-    if promo and promo[0][2] < promo[0][1]:
-        db_query("UPDATE users SET balance = balance + ? WHERE id=?", (promo[0][0], uid))
-        db_query("UPDATE promo SET used_count = used_count+1 WHERE code=?", (code,))
-        db_query("INSERT INTO used_promos VALUES (?,?)", (uid, code))
-        bot.reply_to(message, f"✅ Промокод активирован! +{promo[0][0]} 🪙")
-    else:
-        bot.reply_to(message, "❌ Неверный или просроченный промокод.")
+    if not promo:
+        bot.reply_to(message, "❌ Неверный промокод.")
+        return
+    reward, limit, used = promo[0]
+    if used >= limit:
+        bot.reply_to(message, "❌ Лимит использований этого промокода исчерпан.")
+        return
+    db_query("UPDATE users SET balance = balance + ? WHERE id=?", (reward, uid))
+    db_query("UPDATE promo SET used_count = used_count + 1 WHERE code=?", (code,))
+    db_query("INSERT INTO used_promos VALUES (?,?)", (uid, code))
+    bot.reply_to(message, f"✅ Промокод активирован! Вы получили {reward} 🪙.")
 
 @bot.message_handler(func=lambda m: m.text == "📦 Кейсы")
 def cases_button(message):
@@ -799,7 +831,7 @@ def daily_bonus(message):
 @bot.message_handler(func=lambda m: m.text == "🎲 Статистика")
 def stats_button(message):
     uid = message.from_user.id
-    stats, _ = db_query("SELECT total_games, total_wins, game_dice_wins, game_coin_wins, game_slots_wins, game_casino_wins, game_tic_tac_toe_wins, game_mines_wins FROM stats WHERE user_id=?", (uid,), True)
+    stats, _ = db_query("SELECT total_games, total_wins, game_dice_wins, game_coin_wins, game_slots_wins, game_casino_wins, game_tic_tac_toe_wins, game_mines_wins, game_basketball_wins FROM stats WHERE user_id=?", (uid,), True)
     if stats:
         s = stats[0]
         text = (f"📊 Ваша статистика:\n"
@@ -810,7 +842,8 @@ def stats_button(message):
                 f"🎰 slots: {s[4]}\n"
                 f"🎰 casino: {s[5]}\n"
                 f"❌⭕ крестики-нолики: {s[6]}\n"
-                f"💣 мины: {s[7]}")
+                f"💣 мины: {s[7]}\n"
+                f"🏀 баскетбол: {s[8]}")
         bot.send_message(message.chat.id, text)
     else:
         bot.send_message(message.chat.id, "Нет статистики")
@@ -1052,25 +1085,50 @@ def group_message_handler(message):
     else:
         prefix = get_user_prefix(uid)
         role_text = f"[{prefix}]"
-    # Раскомментируйте следующую строку, если хотите, чтобы бот отвечал эхом с префиксом
+    # Для отображения можно раскомментировать строку ниже, но лучше не спамить
     # bot.reply_to(message, f"{role_text} {message.text}")
-    # Вместо эха – просто показываем действие "печатает", чтобы не флудить
     try:
         bot.send_chat_action(message.chat.id, 'typing')
         time.sleep(0.5)
     except:
         pass
 
-# ======================== АДМИН-ПАНЕЛЬ (только для ADMIN_ID) ========================
+# ======================== АДМИН-ПАНЕЛЬ (с добавлением админов) ========================
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         return
-    bot.send_message(message.chat.id, "👑 Админ-панель:\n/broadcast [текст]\n/give [id] [сумма]\n/createpromo [код] [награда] [лимит]\n/ban [id]")
+    text = "👑 Админ-панель:\n"
+    text += "/broadcast [текст]\n"
+    text += "/give [id] [сумма]\n"
+    text += "/createpromo [код] [награда] [лимит]\n"
+    text += "/ban [id]\n"
+    text += "/addadmin [id]  (только для владельца)"
+    bot.send_message(message.chat.id, text)
+
+@bot.message_handler(commands=['addadmin'])
+def add_admin(message):
+    if message.from_user.id != OWNER_ID:
+        bot.reply_to(message, "Только владелец бота может назначать админов.")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        bot.reply_to(message, "Формат: /addadmin [user_id]")
+        return
+    new_admin = int(args[1])
+    if new_admin == OWNER_ID:
+        bot.reply_to(message, "Владелец уже админ.")
+        return
+    db_query("INSERT OR IGNORE INTO admin_users VALUES (?,?)", (new_admin, OWNER_ID))
+    bot.reply_to(message, f"Пользователь {new_admin} теперь админ.")
+    try:
+        bot.send_message(new_admin, "🎉 Вы стали администратором бота! Используйте /admin для списка команд.")
+    except:
+        pass
 
 @bot.message_handler(commands=['broadcast'])
 def broadcast_command(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         return
     text = message.text.replace("/broadcast ", "")
     if not text:
@@ -1088,7 +1146,7 @@ def broadcast_command(message):
 
 @bot.message_handler(commands=['give'])
 def give_command(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         return
     args = message.text.split()
     if len(args) < 3:
@@ -1105,7 +1163,7 @@ def give_command(message):
 
 @bot.message_handler(commands=['createpromo'])
 def create_promo_command(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         return
     args = message.text.split()
     if len(args) < 4:
@@ -1119,7 +1177,7 @@ def create_promo_command(message):
 
 @bot.message_handler(commands=['ban'])
 def ban_command(message):
-    if message.from_user.id != ADMIN_ID:
+    if not is_admin(message.from_user.id):
         return
     args = message.text.split()
     if len(args) < 2:
@@ -1134,7 +1192,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "S.P.I.R.A. v30.0 is running", 200
+    return "S.P.I.R.A. v31.0 is running", 200
 
 if __name__ == "__main__":
     threading.Thread(target=tournament_worker, daemon=True).start()
