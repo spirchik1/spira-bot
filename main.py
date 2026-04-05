@@ -33,7 +33,7 @@ def db_query(query, params=(), fetch=False):
     finally:
         conn.close()
 
-# Создание всех таблиц (пользователи, статы, инвентарь и т.д.)
+# Создание всех таблиц
 db_query("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, balance INTEGER, mode TEXT, prefix TEXT, ref_id INTEGER, level INTEGER DEFAULT 1, exp INTEGER DEFAULT 0, daily_last TEXT, daily_streak INTEGER DEFAULT 0, lang TEXT DEFAULT 'ru')")
 db_query("CREATE TABLE IF NOT EXISTS stats (user_id INTEGER PRIMARY KEY, total_games INTEGER DEFAULT 0, total_wins INTEGER DEFAULT 0, game_dice_wins INTEGER DEFAULT 0, game_coin_wins INTEGER DEFAULT 0, game_slots_wins INTEGER DEFAULT 0, game_casino_wins INTEGER DEFAULT 0, game_poker_wins INTEGER DEFAULT 0, game_blackjack_wins INTEGER DEFAULT 0, game_wheel_wins INTEGER DEFAULT 0, game_scratch_wins INTEGER DEFAULT 0, max_win INTEGER DEFAULT 0, best_streak INTEGER DEFAULT 0)")
 db_query("CREATE TABLE IF NOT EXISTS mmr (user_id INTEGER, game TEXT, mmr INTEGER DEFAULT 1000, PRIMARY KEY (user_id, game))")
@@ -114,9 +114,24 @@ def game_handler(m):
         elif game == "coin":
             win = random.choice([True, False])
             bot.send_message(m.chat.id, "🪙 Орел!" if win else "🪙 Решка!")
-        elif game == "slots":
+        elif game in ("slots","casino"):
             val = bot.send_dice(m.chat.id, "🎰").dice.value
             if val in (1, 22, 43, 64): win, coeff = True, 10.0
+        elif game in ("poker","blackjack"):
+            player = random.randint(1,10)+random.randint(1,10)
+            dealer = random.randint(1,10)+random.randint(1,10)
+            win = player > dealer
+            coeff = 1.8
+        elif game == "wheel":
+            mult = random.choices([0,1,2,5,10], weights=[30,40,20,8,2])[0]
+            win = mult > 0
+            coeff = mult
+        elif game == "scratch":
+            sym = [random.choice(["🍒","🍋","🍊","7"]) for _ in range(3)]
+            bot.send_message(m.chat.id, f"🎫 {' '.join(sym)}")
+            if sym[0]==sym[1]==sym[2]:
+                win = True
+                coeff = 5 if sym[0]!="7" else 10
         
         if win:
             prize = int(bet * coeff)
@@ -124,52 +139,179 @@ def game_handler(m):
             bot.send_message(m.chat.id, f"✅ Выигрыш: {prize} 🪙")
         else:
             bot.send_message(m.chat.id, "❌ Проигрыш")
-    except: bot.reply_to(m, "Введите число!")
+    except:
+        bot.reply_to(m, "Введите число!")
 
 # ==========================================
-# 5. ДОП. ФУНКЦИИ (TTS, Imagine, Guilds)
+# 5. ОБРАБОТЧИКИ КНОПОК
+# ==========================================
+@bot.message_handler(func=lambda m: m.text == "💰 Баланс")
+def balance_btn(m):
+    u = get_u(m.from_user.id)
+    if u:
+        bot.reply_to(m, f"💰 Ваш баланс: {u['bal']} 🪙")
+    else:
+        bot.reply_to(m, "Напишите /start")
+
+@bot.message_handler(func=lambda m: m.text == "👤 Профиль")
+def profile_btn(m):
+    u = get_u(m.from_user.id)
+    if u:
+        text = f"👤 {m.from_user.first_name}\nУровень: {u['level']}\nОпыт: {u['exp']}/{u['level']*100}\nБаланс: {u['bal']} 🪙"
+        bot.reply_to(m, text)
+    else:
+        bot.reply_to(m, "/start")
+
+@bot.message_handler(func=lambda m: m.text == "🏆 ТОП")
+def top_btn(m):
+    data, _ = db_query("SELECT name, balance FROM users ORDER BY balance DESC LIMIT 10", fetch=True)
+    if data:
+        msg = "🏆 ТОП-10 богачей:\n" + "\n".join([f"{i+1}. {row[0]}: {row[1]} 🪙" for i,row in enumerate(data)])
+        bot.send_message(m.chat.id, msg)
+    else:
+        bot.send_message(m.chat.id, "Нет данных")
+
+@bot.message_handler(func=lambda m: m.text == "📦 Кейсы")
+def case_btn(m):
+    bot.send_message(m.chat.id, "Кейс 'Обычный кейс' - 5000 🪙\nИспользуйте /case_open case1")
+
+@bot.message_handler(func=lambda m: m.text == "🛒 Магазин")
+def shop_btn(m):
+    items, _ = db_query("SELECT id, name_ru, price FROM shop_items", fetch=True)
+    if items:
+        text = "🛒 Магазин:\n" + "\n".join([f"{n} - {p} 🪙 (купить /buy {i})" for i,n,p in items])
+        bot.send_message(m.chat.id, text)
+    else:
+        bot.send_message(m.chat.id, "Магазин пуст")
+
+@bot.message_handler(func=lambda m: m.text == "⚙️ Бонус")
+def bonus_btn(m):
+    uid = m.from_user.id
+    today = datetime.now().date().isoformat()
+    u = get_u(uid)
+    if not u:
+        return bot.reply_to(m, "/start")
+    last, streak = db_query("SELECT daily_last, daily_streak FROM users WHERE id=?", (uid,), True)[0]
+    if last == today:
+        bot.reply_to(m, "Вы уже получили бонус сегодня!")
+        return
+    if last == (datetime.now().date() - timedelta(days=1)).isoformat():
+        streak += 1
+    else:
+        streak = 1
+    bonus = min(500 + (streak-1)*100, 2000)
+    db_query("UPDATE users SET balance = balance + ?, daily_last = ?, daily_streak = ? WHERE id=?", (bonus, today, streak, uid))
+    bot.reply_to(m, f"✅ Ежедневный бонус: +{bonus} 🪙 (Стрик: {streak})")
+
+@bot.message_handler(func=lambda m: m.text == "📜 Задания")
+def quests_btn(m):
+    bot.send_message(m.chat.id, "Задания в разработке. Скоро будут!")
+
+@bot.message_handler(func=lambda m: m.text == "🎤 TTS")
+def tts_btn(m):
+    msg = bot.send_message(m.chat.id, "Напишите текст для озвучки:")
+    bot.register_next_step_handler(msg, tts_cmd)
+
+@bot.message_handler(func=lambda m: m.text == "🎨 Imagine")
+def imagine_btn(m):
+    msg = bot.send_message(m.chat.id, "Опишите картинку:")
+    bot.register_next_step_handler(msg, imagine_cmd)
+
+@bot.message_handler(func=lambda m: m.text == "🏟 Турнир")
+def tournament_btn(m):
+    bot.send_message(m.chat.id, "Турниры каждые 6 часов. /tournament для участия")
+
+@bot.message_handler(func=lambda m: m.text == "⚔️ Аукцион")
+def auction_btn(m):
+    bot.send_message(m.chat.id, "Аукцион: /auction list, /auction sell, /auction bid")
+
+@bot.message_handler(func=lambda m: m.text == "🏛 Гильдия")
+def guild_btn(m):
+    bot.send_message(m.chat.id, "Гильдии: /guild create, /guild join, /guild info")
+
+# ==========================================
+# 6. ДОП. ФУНКЦИИ (TTS, Imagine, и т.д.)
 # ==========================================
 @bot.message_handler(commands=['tts'])
 def tts_cmd(m):
     text = m.text.replace("/tts ", "")
-    if not text: return bot.reply_to(m, "Введите текст")
-    tts = gTTS(text, lang='ru')
-    audio = io.BytesIO()
-    tts.write_to_fp(audio)
-    audio.seek(0)
-    bot.send_voice(m.chat.id, audio)
+    if not text:
+        if m.reply_to_message and m.reply_to_message.text:
+            text = m.reply_to_message.text
+        else:
+            return bot.reply_to(m, "Введите текст после команды")
+    try:
+        tts = gTTS(text, lang='ru')
+        audio = io.BytesIO()
+        tts.write_to_fp(audio)
+        audio.seek(0)
+        bot.send_voice(m.chat.id, audio)
+    except Exception as e:
+        bot.reply_to(m, f"Ошибка TTS: {e}")
 
 @bot.message_handler(commands=['imagine'])
 def imagine_cmd(m):
     prompt = m.text.replace("/imagine ", "")
-    if not prompt: return bot.reply_to(m, "Опишите картинку")
-    bot.send_message(m.chat.id, "🎨 Рисую...")
+    if not prompt:
+        if m.reply_to_message and m.reply_to_message.text:
+            prompt = m.reply_to_message.text
+        else:
+            return bot.reply_to(m, "Опишите картинку")
+    bot.send_message(m.chat.id, "🎨 Генерирую изображение...")
     try:
         response = g4f.ChatCompletion.create(model="dall-e-3", messages=[{"role":"user","content":prompt}])
         bot.send_message(m.chat.id, f"Результат: {response}")
-    except: bot.reply_to(m, "Ошибка генерации")
+    except Exception as e:
+        bot.reply_to(m, f"Ошибка генерации: {e}")
 
-# Фоновый воркер для турниров
+@bot.message_handler(commands=['tournament'])
+def tournament_reg(m):
+    uid = m.from_user.id
+    bot.reply_to(m, "Вы зарегистрированы на турнир (тест)")
+
+@bot.message_handler(commands=['auction'])
+def auction_cmd(m):
+    bot.reply_to(m, "Аукцион временно в разработке")
+
+@bot.message_handler(commands=['guild'])
+def guild_cmd(m):
+    bot.reply_to(m, "Гильдии временно в разработке")
+
+@bot.message_handler(commands=['case_open'])
+def case_open(m):
+    uid = m.from_user.id
+    u = get_u(uid)
+    if not u or u['bal'] < 5000:
+        return bot.reply_to(m, "Недостаточно монет")
+    db_query("UPDATE users SET balance = balance - 5000 WHERE id=?", (uid,))
+    items = ["boost1"]
+    prize = random.choice(items)
+    db_query("INSERT OR IGNORE INTO inventory (user_id, item_id, quantity) VALUES (?,?,1)", (uid, prize))
+    bot.reply_to(m, f"🎁 Вы открыли кейс и получили {prize}!")
+
+# ==========================================
+# 7. ФОНОВЫЙ ВОРКЕР ТУРНИРОВ
+# ==========================================
 def tournament_worker():
     while True:
-        # Тут логика завершения турниров раз в час
+        # Здесь будет логика завершения турниров
         time.sleep(3600)
 
 # ==========================================
-# 6. ЗАПУСК (RENDER)
+# 8. ЗАПУСК (RENDER)
 # ==========================================
 app = Flask(__name__)
 @app.route('/')
-def home(): return "S.P.I.R.A. Online", 200
+def home():
+    return "S.P.I.R.A. Online", 200
 
 if __name__ == "__main__":
-    # Турниры в фоне
+    # Запускаем фоновый воркер для турниров
     threading.Thread(target=tournament_worker, daemon=True).start()
     
-    # Бот в фоне
-    print("🤖 Бот запущен...")
-    threading.Thread(target=lambda: bot.infinity_polling(timeout=60, skip_pending=True), daemon=True).start()
+    # Запускаем бота в отдельном потоке (не демон, чтобы он не завершился)
+    threading.Thread(target=lambda: bot.infinity_polling(timeout=60, skip_pending=True), daemon=False).start()
     
-    # Flask в главном потоке для Render
+    # Flask в основном потоке
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=False)
